@@ -5,9 +5,9 @@
 \section{Introduction}
 \label{sec:intro}
 
-\begin{figure*}[!t]
+\begin{figure}[!t]
   \centering
-  \includegraphics[width=0.85\textwidth]{figures/teaser.pdf}
+  \includegraphics[width=\columnwidth]{figures/teaser.pdf}
   \caption{\sys{}'s headline finding on Llama-3.3-70B-Instruct fp8.
   Cacheblend rescues 95--99\% of post-compaction prompt tokens at the
   prefill stage (top), reproducing the published rescue numbers on
@@ -28,7 +28,7 @@
   prefer cacheblend at 32 percent in green, equivalent at 32 percent
   in olive, and prefer no_cache at 37 percent in red, labeled
   "Quality: LLM-judge A/B on n=19 divergent pairs".}
-\end{figure*}
+\end{figure}
 
 Large language model serving has converged on a layered KV-cache
 architecture: vLLM~\cite{vllm-sosp} provides paged-attention prefix
