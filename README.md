@@ -1,39 +1,41 @@
 # skillcacher
 
-A transparent proxy that integrates [cacheblend](https://github.com/LMCache/LMCache)
-(selective KV recompute) with [Claude Code](https://claude.com/claude-code)
-agent traffic on a Llama-3.3-70B-Instruct fp8 / vLLM / LMCache backend,
-plus the **ClaudeCodeTrace** benchmark of redacted on-wire Claude Code
-request bodies.
-
-This is the artifact accompanying the paper:
+Source artifact for:
 
 > **Hit Rate Is Not Output Quality: Characterizing KV-Cache Reuse on Agent Traffic.**
 > Yiheng "Intel" Chen, University of Pennsylvania.
 > [`skillcacher-paper.pdf`](skillcacher-paper.pdf) — 19 pages, ACM sigconf.
 
-## What's in this repo
+Skillcacher is a transparent proxy that integrates
+[cacheblend](https://github.com/LMCache/LMCache) selective KV recompute
+with [Claude Code](https://claude.com/claude-code) agent traffic on a
+Llama-3.3-70B-Instruct fp8 / vLLM / LMCache backend. The repo contains
+the proxy, the bench harness used in §5, the LLM-judge driver, the
+RunPod orchestration scripts, the paper sources, and the pytest suite.
+
+The companion dataset, **ClaudeCodeTrace** (13 redacted Claude Code
+captures, 182 turns, 411k tokens; CC-BY 4.0), is published separately
+at
+[`intelchen/claudecode-trace`](https://huggingface.co/datasets/intelchen/claudecode-trace).
+
+## Layout
 
 ```
-src/skillcacher/         — proxy, bench harness, judge runner, span registry
-scripts/                 — operator entry points (run_judge, redact, publish, download)
-scripts/dev/             — reproducibility helpers (oneshot pod, recompute probe, ...)
-scripts/deploy/          — RunPod provisioning / bootstrap / teardown
-tests/                   — pytest suite (unit + structural)
-paper/                   — LaTeX sources (acmart sigconf, figures, refs)
+src/skillcacher/   proxy, bench harness, judge runner, span registry
+scripts/           operator entry points (run_judge, redact, download)
+scripts/dev/       reproducibility helpers (oneshot pod, recompute probe)
+scripts/deploy/    RunPod provisioning / bootstrap / teardown
+tests/             pytest suite (unit + structural)
+paper/             LaTeX sources (acmart sigconf, figures, refs)
 ```
 
-The dataset itself lives on Hugging Face:
-[`intelchen/claudecode-trace`](https://huggingface.co/datasets/intelchen/claudecode-trace),
-CC-BY 4.0.
-
-## Quickstart — replay the dataset
+## Reproducing the paper numbers
 
 ```sh
 # 1. Pull the public corpus to ./benchmark/data/
 python scripts/download_claudecode_trace.py
 
-# 2. Stand up a 2× H100 pod with the patched lmcache backend
+# 2. Provision a 2× H100 pod with the patched lmcache backend
 bash scripts/deploy/provision.sh
 
 # 3. Replay one condition (no_cache / prefix_cache / cacheblend)
@@ -42,13 +44,15 @@ bash scripts/deploy/provision.sh
     --captures swebench_verified \
     --output benchmark/results/my-run/
 
-# 4. Tear down the pod when done
+# 4. Tear down
 bash scripts/deploy/teardown.sh
 ```
 
-A 2× H100 80GB pod-hour on RunPod SECURE is ~$5; a full quality-eval pass
-across the n=99 main corpus runs in ~30 min. See `paper/sections/09-appendix.tex`
-for the full reproducibility recipe and exact environment variables.
+A 2× H100 80GB SXM pod-hour on RunPod SECURE is approximately $5;
+one full quality-eval pass across the n=99 main corpus completes in
+about 30 minutes. The end-to-end recipe, including all environment
+variables and the LMCACHE_BLEND_RECOMPUTE_RATIOS default, is in
+`paper/sections/09-appendix.tex`.
 
 ## Building the paper
 
@@ -63,20 +67,21 @@ sudo tlmgr install latexmk acmart booktabs microtype xcolor \
     pdfcol kvoptions inconsolata mweights ncctools
 ```
 
-Then:
-
 ```sh
 cd paper
 make figures   # regenerate plots from benchmark/results/
 make pdf       # produces main.pdf
 ```
 
+The shipped `skillcacher-paper.pdf` at the repo root is the same
+submission-time build.
+
 ## License
 
-Code: MIT (see `LICENSE`).
-Paper text + figures: CC-BY 4.0.
-Dataset: CC-BY 4.0 (on Hugging Face).
+- Code: MIT (see `LICENSE`).
+- Paper text + figures: CC-BY 4.0.
+- Dataset: CC-BY 4.0 (Hugging Face).
 
 ## Citation
 
-If you use this work, please cite the paper (see `CITATION.cff`).
+See `CITATION.cff`.
