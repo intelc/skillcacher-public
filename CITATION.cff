@@ -7,7 +7,7 @@ authors:
     affiliation: "University of Pennsylvania"
     email: intel@intelchen.com
 license: MIT
-repository-code: "https://github.com/intelchen/skillcacher-public"
+repository-code: "https://github.com/intelc/skillcacher-public"
 preferred-citation:
   type: article
   title: "Hit Rate Is Not Output Quality: Characterizing KV-Cache Reuse on Agent Traffic"
