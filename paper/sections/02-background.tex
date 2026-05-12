@@ -1,0 +1,131 @@
+% =============================================================================
+% Background
+% =============================================================================
+
+\section{Background}
+\label{sec:background}
+
+This section establishes the four pieces of vocabulary that
+\S\ref{sec:system}--\S\ref{sec:evaluation} assume: vLLM's paged-attention
+prefix cache, LMCache's cross-request KV store, cacheblend's selective
+recompute, and Claude Code's \texttt{/compact} boundary. Readers
+familiar with the first three may skim to \S\ref{sec:bg-claudecode};
+the \texttt{/compact} pattern is what makes the rest of the paper a
+non-trivial integration problem.
+
+\subsection{vLLM and prefix caching}
+\label{sec:bg-vllm}
+
+vLLM~\cite{vllm-sosp} serves a Transformer LLM by paging its KV cache
+into fixed-size blocks (typically 16 tokens). Each block is identified
+by a content hash over the token IDs that produced it; when an incoming
+request's tokenized prompt has a prefix whose content hashes match
+blocks already resident in the cache, vLLM skips the prefill compute
+for those blocks and reuses the cached KV directly. Because the hash
+is over the exact token sequence and the model weights are fixed,
+prefix caching is mathematically lossless: the KV state at the end of
+a cache-hit prefill is bit-identical to the state that fresh
+recomputation would produce.
+
+This guarantee --- same prefix, same weights, same KV --- is what makes
+our no\_cache$\leftrightarrow$prefix\_cache equivalence result in
+\S\ref{sec:eval-identity} trivially expected at $T=0$, and what makes
+the cross-request mechanism in \S\ref{sec:bg-lmcache} possible.
+
+\subsection{LMCache and cross-request KV reuse}
+\label{sec:bg-lmcache}
+
+vLLM's prefix cache lives inside a single engine instance and evicts
+under GPU memory pressure. LMCache~\cite{lmcache-paper} extends the
+prefix-cache substrate by adding a cross-request, CPU- and
+disk-backed store. The lookup semantics are the same (content-addressed
+by chunk hash), but the working set is two to three orders of magnitude
+larger and persists across requests, sessions, and pod restarts.
+
+We use the V1 connector
+(\texttt{LMCacheConnectorV1} in vLLM 0.19+) and its chunk granularity
+(256 tokens) throughout. Each chunk that matches the cross-request store
+contributes to the request's \emph{cache\_read tokens} counter, which is
+the per-turn measurement of \texttt{lmcache}'s engagement with that
+request --- we report it directly in \S\ref{sec:eval-hitrate} as the
+rescue rate.
+
+\subsection{Cacheblend's selective recompute}
+\label{sec:bg-cacheblend}
+
+Plain LMCache requires \emph{exact prefix match}: a single token
+inserted at position $k$ invalidates the cache for every chunk from $k$
+onwards. This is fine for cache-friendly workloads (RAG with stable
+documents, frozen system prompts), but it loses against any workload
+that shifts content positionally --- and post-compaction agent traffic
+(\S\ref{sec:bg-claudecode}) is exactly that.
+
+Cacheblend~\cite{lmcache-cacheblend} relaxes the exact-prefix
+requirement to \emph{positional} match: when a chunk that was the 5th
+in one request appears as the 3rd in another, cacheblend reuses the
+cached KV for the chunk but recomputes a small fraction of the
+attention layers in the rotated positional context (the
+\emph{selective recompute}). The relevant knobs:
+
+\begin{itemize}
+\item \texttt{blend\_min\_tokens} (256 default): minimum chunk size at
+  which the blend mechanism engages. Sub-256-token requests bypass
+  cacheblend and fall through to plain prefix caching.
+\item \texttt{blend\_recompute\_ratios} (0.15 default): fraction of
+  attention layers recomputed per blended chunk. Higher means less
+  quality drift but more compute --- the entire point of the mechanism
+  is that 0.15 is supposed to be enough.
+\item \texttt{blend\_special\_str} (\texttt{\#\,\#} default): the
+  string sentinel that marks chunk boundaries in the prompt.
+\end{itemize}
+
+The published cacheblend evaluation~\cite{lmcache-cacheblend} reports
+70--90\% rescue on permuted-RAG workloads and notes ``small but
+bounded'' quality drift, citing accuracy preservation on TruthfulQA at
+a single recompute ratio. \emph{We pick up the methodological thread
+here}: agent traffic is not RAG, $T=0$ greedy decoding makes
+single-token differences load-bearing, and hit rate is not output
+quality. \S\ref{sec:evaluation} measures all three.
+
+\subsection{Claude Code and the \texttt{/compact} cliff}
+\label{sec:bg-claudecode}
+
+Claude Code~\cite{claude-code} is a coding agent that drives a Claude
+model (or, through our proxy, any LLM exposing an Anthropic-shaped
+API) through multi-turn tasks. Each turn's request body is, roughly,
+the concatenation of: a $\sim$2.5k-token system prompt; the accumulated
+conversation history (user messages, model responses, tool calls, and
+tool outputs); the user's latest message; and a list of available
+tools. As the conversation grows turn over turn, the prompt grows
+strictly: turn 5 of a session contains all the tokens of turn 4 plus
+the new turn's input and output.
+
+This monotone-growth structure is, by construction, the case prefix
+caching is designed for. The pre-compact phase of a CC session
+exhibits near-perfect prefix-cache utilization in practice --- each
+turn re-prefills only the new tokens of that turn.
+
+The discontinuity is \texttt{/compact}. At a configurable threshold
+(default $\sim$80\% of the context window, with a hard floor at 100k
+tokens), CC asks the LLM to summarize the conversation so far into an
+800-token, 9-section structured summary. The next request then sends:
+system prompt + the 800-token summary + a placeholder ``conversation
+continues'' marker + the latest user message. The pre-compaction
+history is gone; in its place is a synthesized summary that the model
+has never seen at this prefix position before.
+
+This is the cliff. From the prefix cache's perspective, the
+post-compaction request shares only its system prompt with the
+pre-compaction session --- everything after the first $\sim$2.5k
+tokens is new. The prefix cache hit ratio collapses to roughly
+\texttt{(system\_prompt\_tokens / total\_prompt\_tokens)}, which on
+a typical 30k-token post-compact request is around 8\%. The remaining
+$\sim$27.5k tokens must be reprefilled, paying a latency hit that
+scales linearly with prompt size and a recurring compute cost on every
+post-compact turn for the rest of the session.
+
+Cacheblend was designed for this pattern --- summary insertion is
+exactly the positional-shift case its selective recompute targets ---
+but, as \S\ref{sec:system} shows, adapting cacheblend to real CC
+traffic required closing three concrete integration gaps before any
+of the rescue numbers in \S\ref{sec:eval-hitrate} held in practice.

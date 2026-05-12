@@ -1,0 +1,58 @@
+% =============================================================================
+% Conclusion
+% =============================================================================
+
+\section{Conclusion}
+\label{sec:conclusion}
+
+We presented \sys{}, a transparent proxy (drop-in for Claude Code
+clients given a patched lmcache backend) that integrates cacheblend
+with Claude-Code-shaped traffic replayed on a Llama-3.3-70B fp8 +
+vLLM + LMCache backend; \dataset{}, a benchmark of 13 captures /
+182 turns / 411k tokens of redacted on-wire CC request bodies; and,
+to our knowledge, the first measurement of cacheblend's
+agent-protocol usefulness cost on natural agent traffic at this
+backend scale. Across two corpus subsets (combined $n{=}99$
+substantive turns) cacheblend rescues a median 76.5\% of prefill
+tokens; the published 95--99\% steady-state peak appears on only
+6\% of turns and disappears entirely on the
+\texttt{skill\_invocation/} workload
+(Table~\ref{tab:hit-rate}, Table~\ref{tab:cross-corpus}). The rescue
+is not free: at $T{=}0$, 30\% of substantive turns produce severely
+divergent output (Sonnet-4.6 judge analysis on the divergent slice
+$n_{\text{div}}{=}19$ from the SWE-V+\texttt{post\_compact} subset:
+31.6\% prefer cacheblend, 63.2\% conditional non-inferiority versus an
+85\% pre-registered gate; Opus-4.7 and Haiku-4.5 majority-vote
+replicates Sonnet exactly; Table~\ref{tab:judge},
+Table~\ref{tab:multi-judge}).
+
+The methodological argument we hope to leave the field with is simpler
+than the patches: \emph{hit rate is not output quality, and a
+KV-cache reuse mechanism that hits at the published rate while
+producing systematically different output on the same input is not
+the same artifact}. \sys{} and \dataset{} are the substrate for
+asking that second question on agent-shaped workloads; we hope they
+help.
+
+\paragraph{Availability.} \dataset{} is available now at
+\url{https://huggingface.co/datasets/intelchen/claudecode-trace}
+under CC-BY 4.0. The dataset contains redacted CC outbound request
+bodies (\S\ref{sec:dataset-redact}) collected from the lead author's
+own usage of Claude Code; redaction removes Tailscale/HF/RunPod
+credentials, local filesystem paths, and the CC client account
+identifier. Anthropic Claude Code is closed-source proprietary
+software; the redacted captures themselves are released as factual
+recordings of the wire protocol (analogous to network capture
+fixtures), which we believe is consistent with CC's terms of
+service for non-derivative research use, but we make no legal
+warranty.
+\sys{} source, the patched lmcache wheel, the bench harness, and
+the figure-generation scripts will be released on acceptance under
+MIT license. For double-blind review, a frozen submission-time tag
+is accessible via an anonymous Zenodo archive linked from the
+submission. The
+\texttt{scripts/dev/\allowbreak{}extract\_\allowbreak{}full\_\allowbreak{}corpus\_\allowbreak{}rescue.py}
+and \texttt{extract\_\allowbreak{}tool\_\allowbreak{}call\_\allowbreak{}rate.py}
+drivers used for the quantitative tables in \S\ref{sec:evaluation}
+are part of that artifact and re-run end-to-end against the public
+\dataset{}.

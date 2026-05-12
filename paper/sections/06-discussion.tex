@@ -1,0 +1,297 @@
+% =============================================================================
+% Discussion
+% =============================================================================
+
+\section{Discussion}
+\label{sec:discussion}
+
+\subsection{What this means for deployment}
+
+The headline takeaway from \S\ref{sec:evaluation} is that cacheblend's
+rescue is real but not free. On Llama-3.3-70B-Instruct fp8 with our
+patches, the rescue is bimodal (median 76.5\% across the main
+$n{=}99$ corpus, with 6\% of turns reaching the published 95--99\%
+peak; Table~\ref{tab:hit-rate}, Table~\ref{tab:cross-corpus}) ---
+and at $T{=}0$, severe ($<$0.3 token-identity to no-cache) divergence
+appears on 30\% of substantive turns in the deep-evaluation subset
+($n_{\text{sub}}{=}47$) and on 26\% in the combined main corpus
+($n{=}99$). On the divergent slice of the deep subset
+($n_{\text{div}}{=}19$), an LLM judge prefers cacheblend's output
+on only 31.6\% of pairs (Table~\ref{tab:judge}). The asymmetry has
+three deployment-relevant implications.
+
+\paragraph{For hit-rate-only workloads, the quality cost is irrelevant
+--- but the latency cost still applies.} Any deployment that uses
+prefix caching for throughput accounting without surfacing model
+outputs directly to end users --- bulk embedding pipelines,
+throughput-benchmarking harnesses, KV-cache research itself --- need
+not worry about the 30\% divergence: those outputs aren't read. But
+the TTFT result of \S\ref{sec:eval-latency} (cacheblend 55\% slower at
+median, 7$\times$ slower at peak rescue) still applies: cache hits
+are not free latency on a 70B fp8 + H100 backend because LOAD
+bandwidth approximately cancels prefill savings. Whether cacheblend
+is a net win for these workloads depends on the deployment's
+LOAD-to-prefill cost ratio (smaller models, faster interconnect,
+slower compute, or throughput-vs-latency optimization all shift the
+answer).
+
+\paragraph{For interactive coding agents like Claude Code, the
+divergence is load-bearing.} The 37\% no-cache-preferred rate is not a
+rounding error: an agent that picks a measurably worse next step on
+roughly one in three post-cache turns will surface to end users as
+``the cached path is dumber.'' Worse, the failure mode is sometimes a
+\emph{decode-mode flip} (tool call$\to$prose, 11\% of substantive
+turns); a CC harness that expects a tool-call JSON and receives prose
+must either retry, surface a degraded user experience, or silently
+fall through. None of these are good outcomes.
+
+\paragraph{For batch RAG-style workloads, the published cacheblend
+evaluation remains valid.} Our finding is specific to agent traffic
+with multi-turn cache state accumulation; RAG-style workloads where
+cache LOOKUP fires once against a single retrieved document set do not
+exhibit the same dual-mode divergence pattern. The cacheblend paper's
+RAG measurements~\cite{lmcache-cacheblend} are not contradicted by ours.
+
+\subsection{Why agent traffic is harder than RAG for cacheblend}
+\label{sec:disc-why-agents}
+
+The cacheblend paper~\cite{lmcache-cacheblend} reports near-100\%
+output-quality preservation on permuted-RAG benchmarks at the same
+0.15 recompute ratio we use. Our 60\% bit-identity + 30\%
+severe-divergence + 8.5\% asymmetric mode-flip rate is a much worse
+quality picture on the same mechanism. The 0.15 ratio did not
+change; the workload did. We hypothesize three structural reasons,
+which we are not yet able to fully ablate but state as testable
+hypotheses for follow-up work:
+
+\paragraph{(i) Decode mode is binary in agent traffic, continuous in
+RAG.} A RAG response is a prose answer where a small logit
+perturbation at position $k$ produces a slightly different word at
+position~$k$; the rest of the answer remains semantically close. An
+agent response in CC's protocol must commit, within the first $\sim$5
+output tokens, to one of two modes: emit \texttt{\{"type":~"function"}
+(tool-call) or emit natural-language prose (which the harness cannot
+act on). Cacheblend's selective recompute introduces a bounded
+logit perturbation, but at position~0 of the output that perturbation
+can flip the argmax from \texttt{\{} to \texttt{T}/\texttt{B}/\texttt{L}
+(common prose openers). Once a mode is chosen, attention to the
+already-emitted prefix reinforces it. RAG outputs do not have this
+binary regime sensitivity; agent outputs do, and
+\S\ref{sec:eval-mode}'s 8.5\% asymmetric stall rate is the direct
+consequence.
+
+\paragraph{(ii) Multi-turn cache accumulation amplifies drift on shared
+chunks.} RAG is typically single-turn: retrieve, blend, answer. Agent
+traffic is multi-turn, and shared chunks between turns are common ---
+the system prompt, repeated tool definitions, and prior conversation
+history all appear in successive prompts. \emph{In our replay setup,
+prompts are fixed captured request bodies; the model's generated
+outputs do not feed back into subsequent prompts.} The drift
+accumulation is purely \emph{cache-side}: turn $N$'s STORE writes KV
+for the prompt chunks it just processed --- including any chunks
+whose KV was itself produced by cacheblend's selective recompute on
+turn~$N{-}1$. When turn~$N{+}1$ LOOKUPs a chunk that overlaps with
+turn~$N$'s prompt, it retrieves whatever KV turn~$N$ wrote, which
+may already be one blending step away from fresh compute. The
+cacheblend paper's ``small but bounded'' drift bound applies to each
+individual blend operation; we hypothesize that on chunks shared
+across multiple consecutive turns the cumulative drift compounds.
+This is a hypothesis we have not directly isolated --- a clean test
+would require comparing single-turn vs multi-turn replays at fixed
+$N$th-turn cache states, which we do not run here.
+
+\paragraph{(iii) Templated prompts have positional dependencies that
+permuted-RAG does not.} The cacheblend mechanism is most accurate when
+the model's attention to a chunk is approximately invariant to that
+chunk's exact position --- permuted-RAG, by construction, trains on
+this kind of invariance. CC's prompts are highly templated (system
+prompt with tool list at fixed offsets, conversation history in
+chronological order, current user message at a known position) and the
+model has learned strong position-conditioned patterns. When
+cacheblend re-uses a cached chunk at a new position, the chunk's KV
+reflects attention computed in the \emph{original} positional context,
+and the selective-recompute correction sees only 15\% of layers
+through the new positional context. For position-sensitive templates
+the residual drift on the un-recomputed 85\% of layers compounds; for
+permuted-RAG it largely cancels.
+
+Hypothesis~(iii) is directly testable: at
+\texttt{LMCACHE\_BLEND\_\allowbreak{}RECOMPUTE\_RATIOS}=1.0, every layer
+is recomputed in the new positional context, so the un-recomputed
+residual vanishes and identity to no\_cache should recover. We test
+this directly in \S\ref{sec:disc-knobs} and find it does. Hypotheses
+(i)~and (ii) remain open empirical questions for future work.
+
+\subsection{Recompute-ratio sweep tests hypothesis (iii)}
+\label{sec:disc-knobs}
+
+To probe hypothesis~(iii) of \S\ref{sec:disc-why-agents} ---
+residual drift on the un-recomputed layers --- we sweep
+\texttt{LMCACHE\_BLEND\_\allowbreak{}RECOMPUTE\_RATIOS} over
+$\{0.15, 0.5, 1.0\}$ on the
+\texttt{swebench\_verified/\allowbreak{}pytest-7490} fixture (4
+turns, 3 substantive at $\geq$256 prompt tokens, samples=1, otherwise
+identical to the SWE-V+\texttt{post\_compact} subset methodology):
+
+\begin{table}[h]
+\small
+\centering
+\begin{tabular}{lrrr}
+\toprule
+Ratio & Mean token-identity to NC & Aggregate rescue \% \\
+\midrule
+\textbf{0.15 (default)} & 0.847 & 27.4\% \\
+0.50                    & 0.831 & 27.4\% \\
+\textbf{1.00}           & \textbf{1.000} & 27.4\% \\
+\bottomrule
+\end{tabular}
+\caption{Recompute-ratio sweep on \texttt{pytest-7490} ($n{=}3$
+substantive turns per ratio). Identity to the no\_cache baseline
+recovers to 1.000 at ratio=1.0 (every layer recomputed in the new
+positional context) but stays around 0.83 at the intermediate ratio,
+not 0.92 as one would extrapolate. Rescue percent is unchanged because
+\texttt{RECOMPUTE\_RATIOS} controls layer recompute, not which KV
+tokens are loaded from cache.}
+\label{tab:recompute-sweep}
+\end{table}
+
+Two findings:
+
+\paragraph{Hypothesis (iii) is supported.} At ratio=1.0, identity to
+\texttt{no\_cache} recovers bit-perfectly. Recomputing every layer in
+the new positional context eliminates the residual drift that the
+default 0.15 ratio carries. The mechanism we hypothesized in
+\S\ref{sec:disc-why-agents}(iii) is the load-bearing one for the
+identity gap.
+
+\paragraph{Partial recompute did not partially recover on this
+probe.} Going from $0.15 \to 0.5$ (3.3$\times$ more layers recomputed)
+barely moves identity (0.847~$\to$~0.831), within noise on $n{=}3$.
+Recovery is concentrated at the discrete $\to{}1.0$ jump on the data
+points we have. \emph{We do not claim the intermediate-ratio tradeoff
+curve is established from $n{=}3$:} a larger sweep (denser ratio grid
+$\times$ the full deep-evaluation subset) is needed before
+concluding that no monotonic recovery exists between 0.15 and 1.0.
+What is robust from this probe is the discrete endpoint contrast:
+ratio~1.0 produces identity~$=$~1.000 by construction (every layer
+recomputed in the new positional context), confirming the
+positional-context hypothesis. Whether 0.5 or 0.8 would offer a
+useful Pareto-improvement remains an open question.
+
+The combination of \S\ref{sec:eval-latency}'s TTFT measurement
+(cacheblend already slower than \texttt{no\_cache} at the default
+0.15 ratio on our backend) and this sweep's discrete-jump pattern
+suggests cacheblend's default ratio is not clearly a good operating
+point in our measurements, and that ratio=1.0 may not be the
+practical fix (it recomputes every layer, eliminating the rescue
+benefit). A genuine graded tradeoff curve --- one that gives
+proportional identity recovery against linear cost --- may require
+mechanism changes beyond the existing recompute-ratio knob
+(smaller cacheable blocks, layer-importance-aware recompute
+selection, or model-architecture co-design are candidates worth
+exploring).
+
+\paragraph{Sample size caveat.} Three substantive turns per ratio is
+a small sample; the 0.847~$\to$~0.831 dip at 0.5 is plausibly noise.
+What is robust is the discrete jump at 1.0 from $\sim$0.84 to exactly
+1.000 --- that comes from the math, not the sample. A larger probe
+across the full SWE-V+\texttt{post\_compact} subset would tighten the intermediate-ratio
+identity estimates but is unlikely to change the discrete
+0.15$\leftrightarrow$1.0 endpoint contrast.
+
+\subsection{Resource-constrained methodology choices}
+\label{sec:disc-resource}
+
+This paper was produced on a fixed compute budget (\$25 envelope for
+the headline experiments, against a 2$\times$ H100 80GB SXM pool with
+real per-pod cost). Several methodological tightenings a reviewer
+would reasonably ask for --- a raw-no-cache baseline that bypasses our
+parser to validate separator injection is content-neutral, an
+intra-condition repeatability study to bound run-to-run
+nondeterminism, instrumented per-phase TTFT breakdowns (LMCache
+LOAD vs prefill vs blend vs scheduler vs decode), a denser
+recompute-ratio grid, a quantitative patch ablation that runs each
+intermediate configuration as its own pod replay, and a bf16-vs-fp8
+precision comparison --- are individually small but cumulatively a substantial increase in
+pod-hours, well beyond this project's compute budget. We list them
+explicitly as open empirical questions rather than implicit ones, so
+that a reader who wants to commission this work knows where it sits
+relative to our existing claims. The headline findings (rescue is
+bimodal, identity gap is real, latency cost is real, mode-flip
+asymmetry is real) are robust to the methodology gaps we name here ---
+they are direct read-offs from the measurements we did run, not
+inferences that depend on the missing instrumentation. The
+\emph{causal} explanations for those findings are where the missing
+instrumentation would matter most; we have flagged each one as a
+hypothesis rather than a conclusion.
+
+\subsection{Limitations}
+\label{sec:disc-limits}
+
+\textbf{Single model.} All measurements are on Llama-3.3-70B-Instruct
+fp8. The cacheblend mechanism is model-agnostic in design, but the
+empirical quality cost is not: the fp8 quantization noise floor, the
+70B parameter count, and Llama's attention architecture all interact
+with cacheblend's selective recompute. The same patches and methodology
+on Sonnet, Haiku, Llama-8B, or Qwen could produce a different
+divergence distribution. \S\ref{sec:disc-knobs}'s recompute-ratio probe
+is the higher-priority follow-up; multi-backend characterization
+is the longer-horizon next step.
+
+\textbf{Judge calibration.} We replicate the 19-pair A/B against
+Opus-4.7 and Haiku-4.5 in \S\ref{sec:eval-judge}, and the
+three-judge majority vote reproduces Sonnet-4.6's headline numbers
+(31.6\% preference, 63.2\% non-inferior). The single-judge risk is
+reduced but not eliminated --- all three judges share Anthropic's
+RLHF training, so a coordinated calibration bias could still apply.
+A human spot-check is a sensible next step we do not run here.
+
+\textbf{Single decoding temperature.} $T=0$ greedy decoding makes
+single-token differences load-bearing: a divergence at position $k$
+permanently forks the trajectory. Sampling at $T=0.7$ would average
+over multiple plausible continuations and might mask or amplify the
+cross-condition divergence in the marginal distribution. We defer
+the $T>0$ distributional measurement to follow-up work.
+
+\textbf{Sample size.} 19 divergent pairs is small. The 95\% Wilson CI
+on the cacheblend preference rate spans [15.4\%, 54.0\%] --- we cannot
+reject ``cacheblend is preferred half the time'' from the data alone.
+The point estimate's location well below 50\% is what supports the
+non-inferiority gate failing; widening the corpus would tighten the
+interval but is unlikely to change the qualitative direction.
+
+\textbf{Workload diversity within \dataset{}, but a single corpus
+source.} The combined $n{=}99$ corpus mixes SWE-bench-Verified
+sessions, \texttt{post\_compact/} canonical captures, and
+\texttt{skill\_invocation/} (\S\ref{sec:eval-cross-corpus}). All three
+subsets come from one researcher's laptop running one client family
+(CC SDK), so the captured prompt distribution is not yet broad across
+operators, languages, or task domains. The cross-corpus replication
+of the bimodal-rescue and severe-divergence patterns supports
+generality \emph{within Claude-Code-shaped traffic}; we make no claim
+about other agent harnesses (Cursor, Aider, OpenAI Codex, etc.) on
+this evidence alone.
+
+\textbf{Backend specificity.} All measurements use a
+Llama-3.3-70B-Instruct fp8 backend on 2$\times$ H100 80GB SXM, vLLM
+v0.19.0, and lmcache v0.4.2 with our patches. We do not claim
+generality across smaller models, different precisions (bf16),
+faster interconnects, or non-vLLM serving stacks. The bf16 vs fp8
+comparison is the highest-priority open empirical question;
+\S\ref{sec:disc-knobs}'s recompute sweep already isolates one
+hypothesis on the present backend.
+
+\subsection{Recommendation}
+\label{sec:disc-recommend}
+
+We make one concrete methodological recommendation:
+\emph{KV-cache reuse research should report output-quality measurements
+alongside hit-rate measurements, on at least one agentic workload, with
+a structured methodology that includes $T=0$ token-identity and a
+strong-judge blind A/B preference test.} The hit-rate-only framing
+that the field has converged on is sufficient for the RAG-style
+workloads the early prefix-caching literature targeted, but it
+silently elides exactly the failure mode we surface here: a mechanism
+can hit at the published rate and still produce systematically worse
+output on the same input. We provide \dataset{} and the \sys{} harness
+as the reproducible substrate for this kind of evaluation.

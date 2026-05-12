@@ -1,0 +1,63 @@
+% =============================================================================
+% Abstract
+% =============================================================================
+
+Modern LLM agent harnesses such as Claude Code generate long multi-turn
+sessions where the conversation routinely exceeds the model's context
+window, triggering \texttt{/compact}-style summarization that resets
+most of the KV cache. \emph{Cacheblend}~\cite{lmcache-cacheblend} proposes
+selective KV recompute to bridge this ``compaction cliff,'' but
+published evaluations have focused on retrieval-augmented generation
+rather than agent traffic, and have measured byte-level \emph{hit
+rate} rather than \emph{output quality}.
+
+We present \sys, a transparent proxy (drop-in for Claude Code clients,
+relying on a patched lmcache backend) that integrates cacheblend with
+real Claude Code traffic through three small but load-bearing patches: a
+structural-anchor segment parser that injects cacheblend's chunk
+separators around CC-shaped blocks; a chunk-aligned \texttt{LOOKUP} fix
+that resolves an upstream lmcache/vllm hash mismatch on chunk
+boundaries; and per-turn header normalization that stabilizes chunk
+hashes across multi-turn sessions. We additionally publish \dataset, a
+public benchmark artifact of 13 redacted Claude Code captures spanning
+182 turns and 411\,k tokens across three subsets:
+\texttt{swebench\_verified/} (5 captures, 24 turns),
+\texttt{post\_compact/} (7 captures, 105 turns), and
+\texttt{skill\_invocation/} (1 capture, 53 turns).
+
+The evaluation in this paper is structured around three nested
+denominators:
+\textbf{the main corpus} (combined $n{=}99$ substantive turns,
+SWE-V $\cup$ \texttt{post\_compact} v6+v7 $\cup$
+\texttt{skill\_invocation};
+used for rescue rate + output identity),
+\textbf{the deep-evaluation subset}
+(SWE-V $\cup$ \texttt{post\_compact} v6+v7, $n_{\text{sub}}{=}47$;
+used for TTFT, tool-call mode, recompute-ratio sweep, and LLM-judge),
+and \textbf{the divergent-judged slice}
+($n_{\text{div}}{=}19$ of the 47, the non-bit-identical pairs).
+
+On Llama-3.3-70B-Instruct fp8 with our patches, across the main
+$n{=}99$ corpus cacheblend rescues a \emph{median} 76.5\% of
+substantive-turn prefill tokens (p25 67\%, p75 95\%); 6\% of turns
+reach the published 95--99\% steady-state peak, but only on
+long-prompt workloads --- on \texttt{skill\_invocation/} the peak
+vanishes entirely (0/52 turns $\geq$99\%). To our knowledge this is
+the first measurement of cacheblend on naturalistic Claude-Code-shaped
+traffic.
+On the $n_{\text{sub}}{=}47$ deep-evaluation subset, two further
+costs emerge that the published hit-rate framing elides.
+\emph{Latency:} cacheblend's median TTFT is 55\% larger than the
+no-cache baseline and 7$\times$ larger at the $\geq$99\% rescue peak,
+so high rescue does not translate into latency reduction on this
+setup.
+\emph{Agent-protocol usefulness:} 30\% of substantive turns at $T{=}0$
+produce severely divergent output ($<$0.3 token-identity to no-cache),
+including 11\% with decode-mode flips (tool-call $\to$ prose); on the
+divergent slice a Sonnet-4.6 LLM-judge blind A/B prefers cacheblend on
+only 32\% of pairs (95\% Wilson CI [15\%, 54\%]), with cacheblend
+conditionally non-inferior on 63\% vs.\ an 85\% pre-registered gate.
+We argue that cacheblend's published hit-rate numbers, while real,
+come with both a latency cost and an agent-protocol-usefulness cost
+that systems papers should report alongside hit rate.
+

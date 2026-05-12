@@ -1,0 +1,64 @@
+% =============================================================================
+% Related Work
+% =============================================================================
+
+\section{Related Work}
+\label{sec:related}
+
+\paragraph{LLM serving infrastructure.}
+vLLM~\cite{vllm-sosp} introduced paged-attention KV caching as a
+production-grade serving substrate; SGLang~\cite{sglang-paper} extended
+the paged-attention idea with RadixAttention's tree-structured prefix
+sharing; TGI~\cite{tgi-repo} and DistServe~\cite{distserve-osdi}
+explored complementary directions in batching and disaggregated
+prefill/decode. \sys{} layers on top of vLLM and reuses its
+paged-attention prefix cache without modification; our contribution is
+at the proxy and cross-request integration layer, not at the inference
+kernel.
+
+\paragraph{KV cache reuse and prefix caching.}
+The closest prior work is the LMCache + cacheblend
+line~\cite{lmcache-paper, lmcache-cacheblend}, which provides the
+cross-request KV store and the selective-recompute mechanism that \sys{}
+integrates. Prompt Cache~\cite{promptcache-mlsys} addressed a similar
+problem from the compiler-IR direction (statically-analyzable prompt
+templates), and ChunkAttention~\cite{chunkattention} extended
+prefix-sharing to the attention computation itself. None of these prior
+systems target Anthropic-shaped agent traffic, and none measure the
+output-quality cost of their reuse mechanism on a non-RAG workload.
+Our contribution against this thread is twofold: (a) the patches and
+proxy needed to actually run cacheblend against natural CC traffic on a
+non-toy backend (\S\ref{sec:patches}), and (b) the quality-versus-rescue
+characterization in \S\ref{sec:evaluation} that the published cacheblend
+evaluation did not surface.
+
+\paragraph{LLM agent benchmarks.}
+SWE-bench~\cite{swe-bench-iclr} and its curated variant
+SWE-bench Verified~\cite{swe-bench-verified} provide the canonical
+task suite for agentic coding evaluation; MetaGPT~\cite{metagpt-paper}
+and AgentBench~\cite{agentbench} extend the agent-benchmark surface to
+multi-agent and multi-domain settings. These benchmarks all measure
+\emph{end-task success}: did the agent close the bug, pass the tests,
+write the working code. \dataset{} is complementary, not a replacement
+--- it measures \emph{traffic-shaped} serving-system properties (cache
+hit rate, output identity, judge preference) on captures of CC sessions
+that themselves work on SWE-V tasks. A serving-system paper can use
+\dataset{} to benchmark cache strategy; an agent-quality paper still
+needs SWE-V (or successor) to measure task success.
+
+\paragraph{Output-quality evaluation.}
+MT-Bench~\cite{mtbench}, AlpacaEval~\cite{alpacaeval}, and Chatbot
+Arena~\cite{chatbot-arena} established LLM-as-judge as a credible
+methodology for ranking model outputs. We apply the same methodology
+in a different setting --- not to rank candidate \emph{models} on the
+same input, but to rank the outputs of the same model under different
+\emph{cache strategies}. The position-randomization and
+prompt-caching elements of our setup follow the
+MT-Bench~\cite{mtbench} recipe. We additionally run three-judge
+replication (Sonnet-4.6 / Opus-4.7 / Haiku-4.5;
+Table~\ref{tab:multi-judge}) and find that the majority-vote
+verdict reproduces the single-judge headline rates exactly, which
+is consistent with the cited works' observation that multi-judge
+consensus is a strict improvement over single-judge ranking but the
+calibration gap is small when the divergent-pair sample is well
+separated.

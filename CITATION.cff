@@ -1,0 +1,26 @@
+cff-version: 1.2.0
+message: "If you use this software or the ClaudeCodeTrace dataset, please cite both."
+title: "skillcacher: KV-Cache Reuse on Agent Traffic"
+authors:
+  - family-names: Chen
+    given-names: Yiheng
+    affiliation: "University of Pennsylvania"
+    email: intel@intelchen.com
+license: MIT
+repository-code: "https://github.com/intelchen/skillcacher-public"
+preferred-citation:
+  type: article
+  title: "Hit Rate Is Not Output Quality: Characterizing KV-Cache Reuse on Agent Traffic"
+  authors:
+    - family-names: Chen
+      given-names: Yiheng
+      affiliation: "University of Pennsylvania"
+  year: 2026
+references:
+  - type: data
+    title: "ClaudeCodeTrace"
+    authors:
+      - family-names: Chen
+        given-names: Yiheng
+    repository: "https://huggingface.co/datasets/intelchen/claudecode-trace"
+    license: CC-BY-4.0

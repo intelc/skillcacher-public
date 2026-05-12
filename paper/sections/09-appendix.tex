@@ -1,0 +1,376 @@
+% =============================================================================
+% Appendix
+% =============================================================================
+
+\appendix
+
+\section{Judge Prompt Template}
+\label{app:judge-prompt}
+
+The Sonnet-4.6 judge in \S\ref{sec:eval-judge} is invoked with a
+fixed system prompt and a per-pair user message whose A/B ordering is
+randomized per call. The full templates appear below verbatim;
+the implementation lives in
+\texttt{src/skillcacher/judge/prompt.py}.
+
+\paragraph{System prompt.}
+\begin{quote}\footnotesize\itshape
+You are evaluating two outputs from an AI coding agent. The agent is
+operating in an interactive multi-turn task where it uses tool calls
+(JSON function-call blocks) to read files, edit code, and make
+progress on software-engineering tasks.
+
+Both outputs are responses from the SAME agent context to the SAME
+prompt --- the only difference is the engine's KV-cache strategy.
+Your job is to identify which output is a better next step for the
+agent's task.
+
+When comparing:
+\begin{itemize}
+\item A well-formed tool call (JSON specifying a function name +
+  arguments) is generally better than natural-language prose,
+  because the agent's task requires tool calls to make progress.
+\item When both outputs are tool calls, prefer the one with more
+  appropriate arguments --- sensible file paths, reasonable command
+  flags, useful descriptions.
+\item When both outputs are prose, prefer the one that more directly
+  addresses the task.
+\item If the outputs are functionally equivalent (e.g., same tool
+  with cosmetically different argument wording), respond
+  \texttt{EQUIVALENT}.
+\end{itemize}
+
+Respond with EXACTLY one of these tokens on the first line:
+\texttt{PREFER\_A} \textbar{} \texttt{PREFER\_B} \textbar{} \texttt{EQUIVALENT}.
+Then on a new line, give a 1-sentence rationale ($\leq$ 30 words).
+\end{quote}
+
+\paragraph{User template.} Rendered per pair with the task prompt
+and both outputs substituted:
+\begin{lstlisting}[basicstyle=\ttfamily\footnotesize, frame=single,
+                   framesep=4pt, breaklines=true]
+TASK PROMPT (what the agent was asked to do):
+{task_prompt}
+
+OUTPUT A:
+{output_a}
+
+OUTPUT B:
+{output_b}
+\end{lstlisting}
+
+\paragraph{Parsing.} Responses are parsed with the line-anchored
+regex \texttt{\^{}\textbackslash{}s*(PREFER\_A|PREFER\_B|EQUIVALENT)\textbackslash{}b}
+applied in multiline mode. The label is mapped back to
+\{cacheblend, no\_cache, equivalent\} via the recorded
+\texttt{position\_a} for that call; anything that does not match the
+regex on either of the first two lines is recorded as
+\texttt{UNPARSEABLE} (zero occurrences across the 19-pair run).
+Rationales are extracted as the remainder of the response after the
+label token, trimmed and truncated at the first newline.
+
+\paragraph{Calling conventions.} The judge is invoked via the
+Anthropic Messages API with top-level \texttt{cache\_control:
+\{type: "ephemeral"\}} on the static system prompt; per-pair user
+messages bypass the cache. Position assignment is seeded
+per pair (\texttt{random.Random(42 \^{} hash((capture\_id,
+turn\_index)))}) so that re-running the judge call deterministically
+reproduces both the A/B ordering and any cache hits on the system
+prompt.
+
+\section{Statistical Span Miner}
+\label{app:miner}
+
+The miner extracts repeated token sequences from the
+\dataset{} corpus for the pre-seed dispatcher
+(\S\ref{sec:miner}). Inputs: a list of token streams (one per
+captured request). Parameters: a length floor
+$\ell_{\min}$=256~tokens (matching
+\texttt{lmcache.blend\_min\_tokens}), a frequency floor
+$f_{\min}$=3~distinct streams, a MinHash Jaccard cutoff $J$=0.8,
+and a shingle width $k$=5. The output is a list of
+\texttt{MinedSpan} records, sorted by
+$(\text{frequency descending}, \text{length descending})$, each
+carrying its token ids, originating stream ids, and frequency
+count. The reference implementation
+(\texttt{src/\allowbreak{}skillcacher/\allowbreak{}tagging/\allowbreak{}statistical\_\allowbreak{}miner.py},
+$\sim$340 LoC) follows the procedure below.
+
+\begin{algorithm}[h]
+\small
+\textbf{Inputs:} streams $S_1, \dots, S_m$;
+                 $\ell_{\min}$, $f_{\min}$, $J$, perms $P$, shingle width $k$.\\
+\textbf{Output:} sorted list of mined spans.
+
+\begin{enumerate}
+  \item[1.] \emph{Concatenate.} Build $T = S_1 \cdot \sigma_1 \cdot S_2 \cdot \sigma_2 \cdots S_m$
+    where each $\sigma_i$ is a unique negative sentinel that prevents
+    suffixes from crossing stream boundaries. Maintain a parallel
+    array \texttt{stream\_of\_pos} mapping each position to its
+    originating stream id.
+
+  \item[2.] \emph{Suffix array via prefix doubling.} Compute
+    $\mathrm{SA}[0\,..\,n{-}1]$ such that $\mathrm{SA}[i]$ is the
+    starting index of the $i$-th lex-smallest suffix of $T$. Each
+    round sorts on the composite key
+    $(\mathrm{rank}[i], \mathrm{rank}[i{+}k])$, doubling $k$ each
+    iteration; terminates when all ranks are unique. Total work
+    $O(n \log^2 n)$, memory $O(n)$. (The naive sort by full suffix
+    string is $O(n^2)$ in expectation on this corpus and was
+    benchmarked to hang on $n {\geq} 250\mathrm{K}$.)
+
+  \item[3.] \emph{Kasai LCP.} Compute $\mathrm{LCP}[i]$ = length of
+    the longest common prefix of $\mathrm{SA}[i{-}1]$ and
+    $\mathrm{SA}[i]$ in linear time via the Kasai
+    algorithm~\cite{kasai-lcp}.
+
+  \item[4.] \emph{Monotonic-stack enumeration of maximal repeats.}
+    Sweep $\mathrm{LCP}$ left-to-right with a stack of
+    $(\text{height}, \text{left\_index})$ pairs. For every entry that
+    pops because the current LCP dips below it, emit
+    $\mathrm{SA}[\text{left\_index}{-}1\,..\,i{-}1]$ as a candidate of
+    length \text{height}: those suffixes share at least
+    $\text{height}$ characters. This enumerates the nested case
+    (a 350-token repeat at freq=3 nested inside a 300-token repeat
+    at freq=5 emits both).
+
+  \item[5.] \emph{Floor + sentinel filters.} Discard candidates with
+    length $< \ell_{\min}$, with fewer than $f_{\min}$ distinct
+    source streams (computed via \texttt{stream\_of\_pos}), or
+    containing any sentinel token (negative id). Deduplicate by
+    fingerprint hash.
+
+  \item[6.] \emph{Exact-prefix dedup.} Sort surviving candidates by
+    length descending. If candidate $A$'s tokens are a prefix of an
+    already-kept candidate $B$ with $|A| < |B|$ and they share at
+    least one source stream, drop $A$ ($B$ is strictly more
+    informative).
+
+  \item[7.] \emph{MinHash near-dup dedup.} Compute a $P$-permutation
+    MinHash signature over $k$-shingles for each remaining span. Two
+    spans whose signature Jaccard $\geq J$ are merged, keeping the
+    longer representative. We use $P{=}64$, $k{=}5$, $J{=}0.8$; the
+    blake2b-keyed hash family makes the signatures deterministic
+    across runs and tractable on 64-bit machines.
+
+  \item[8.] \emph{Sort + return.} Sort by
+    $(-\text{frequency}, -\text{length})$ so callers can take the
+    top-$N$ under a budget cap.
+\end{enumerate}
+\caption{\texttt{mine\_spans}: extract length-$\geq{}\ell_{\min}$,
+frequency-$\geq{}f_{\min}$ near-deduped repeated sequences from
+a multi-stream token corpus.}
+\label{alg:miner}
+\end{algorithm}
+
+\paragraph{Empirical scale.} On the union of
+\dataset's three subsets (411k tokens, 182 streams) with
+$\ell_{\min}=256$, $f_{\min}=3$, $J=0.8$, the miner returns
+\textbf{181 spans totalling 278k tokens}, in approximately 18~s on
+a single MacBook Pro core. The top hit is a 1{,}691-token span
+occurring in 26 of the 182 streams (the CC system prompt with tool
+list); the long tail of mid-frequency spans corresponds to repeated
+skill preambles and tool-output formatting blocks.
+
+\section{Reproducibility}
+\label{app:reproducibility}
+
+\paragraph{Pod configuration.} All \S\ref{sec:evaluation} measurements
+use a single pod recipe: \mbox{2$\times$~NVIDIA~H100~80GB} on RunPod's
+\texttt{SECURE} cloud, vLLM v0.19.0 with the
+\texttt{LMCacheConnectorV1} attached, lmcache v0.4.2 with the
+patches in \S\ref{sec:patches}, model
+\texttt{meta-llama/Llama-3.3-70B-\allowbreak{}Instruct} loaded at
+\texttt{dtype=fp8}, tensor-parallel degree~2, and
+\texttt{max\_model\_len=32768}. The cacheblend condition additionally
+exports the eight \texttt{LMCACHE\_*} environment variables in
+Table~\ref{tab:repro-env}; \texttt{PYTHONHASHSEED=0} is mandatory
+for chunk-hash stability across the connector's per-role
+\texttt{TokenDatabase} inits.
+
+\begin{table}[t]
+\small
+\centering
+\begin{tabular}{ll}
+\toprule
+Variable & Value \\
+\midrule
+\texttt{PYTHONHASHSEED} & \texttt{0} (required) \\
+\texttt{VLLM\_KV\_CACHE\_TYPE} & \texttt{lmcache} \\
+\texttt{LMCACHE\_USE\_EXPERIMENTAL} & \texttt{True} \\
+\texttt{LMCACHE\_LOCAL\_CPU} & \texttt{True} \\
+\texttt{LMCACHE\_MAX\_LOCAL\_CPU\_SIZE} & \texttt{40} \\
+\texttt{LMCACHE\_CHUNK\_SIZE} & \texttt{256} \\
+\texttt{LMCACHE\_ENABLE\_BLENDING} & \texttt{True} \\
+\texttt{LMCACHE\_USE\_LAYERWISE} & \texttt{True} \\
+\texttt{LMCACHE\_BLEND\_SPECIAL\_STR} & \texttt{" \# \# "} \\
+\texttt{LMCACHE\_BLEND\_CHECK\_LAYERS} & \texttt{1} \\
+\texttt{LMCACHE\_BLEND\_RECOMPUTE\_RATIOS} & \texttt{0.15} (default) \\
+\bottomrule
+\end{tabular}
+\caption{Environment variables for the \texttt{cacheblend} condition.
+Set on the pod before \texttt{vllm serve} is launched. Omitting any
+of the eight \texttt{LMCACHE\_*} variables causes the engine either
+to crash at startup or to silently fall through to plain prefix
+caching (no rescue).}
+\label{tab:repro-env}
+\end{table}
+
+\paragraph{Provisioning resilience.} RunPod's 2$\times$~H100 pool is
+capacity-tight enough that synchronous HTTP 500 ``no instances
+available'' rejections at \texttt{POST /pods} are routine. We
+combine three mitigations: (i) \texttt{CLOUD\_TYPE=SECURE} with
+\texttt{WAIT\_TIMEOUT\_S=3600} and
+\texttt{PROVISIONING\_TIMEOUT\_S=1800} to let an accepted pod queue
+patiently for hardware; (ii) a bash retry loop around the
+\texttt{skillcacher-bench} invocation for synchronous create
+rejections (20 attempts, 120~s sleep between); (iii) sequential
+execution of multi-condition runs so the harness cannot multiply
+its own capacity demand. The
+\texttt{scripts/dev/recompute\_probe.sh} driver in our repository is
+the canonical example.
+
+\paragraph{Canonical commands.} The complete SWE-V+\texttt{post\_compact} subset replay
+(7~captures, 54~pairs across three conditions) is one invocation:
+\begin{lstlisting}[basicstyle=\ttfamily\scriptsize, frame=single,
+                   framesep=4pt, breaklines=true]
+SKILLCACHER_BACKEND_MAX_COMPLETION_TOKENS=512 \
+MODEL_NAME=meta-llama/Llama-3.3-70B-Instruct \
+DTYPE=fp8 GPU_COUNT=2 TENSOR_PARALLEL_SIZE=2 \
+MAX_MODEL_LEN=32768 CLOUD_TYPE=SECURE \
+WAIT_TIMEOUT_S=3600 PROVISIONING_TIMEOUT_S=1800 \
+skillcacher-bench quality-eval \
+  --corpus-dir tests/fixtures/claude_code_real \
+  --capture-filter \
+"swebench_verified/{astropy-13398,matplotlib-26113,\
+pylint-7080,pytest-7490,sphinx-11510},\
+post_compact/plan4_compaction_spike_v{6_align,7_norm}" \
+  --conditions no_cache,prefix_cache,cacheblend \
+  --samples 1 --temperature 0 \
+  --out benchmark/results/plan5_quality_section1
+\end{lstlisting}
+The judge analysis is then a single offline invocation reading
+the parquets emitted by the above:
+\begin{lstlisting}[basicstyle=\ttfamily\scriptsize, frame=single,
+                   framesep=4pt, breaklines=true]
+export $(grep -E "^ANTHROPIC_API_KEY=" .env | xargs)
+.venv/bin/python scripts/run_judge.py --skip-identical
+\end{lstlisting}
+
+\paragraph{Artifact availability.} Three artifacts support
+end-to-end reproduction. (i)~\dataset{} on Hugging
+Face~\cite{claudecode-trace-hf}, available now under CC-BY 4.0; the
+\texttt{scripts/download\_claudecode\_trace.py} wrapper accepts
+\texttt{--subset} filters. (ii)~\sys{} source, including the
+patched lmcache wheel build script, the proxy, the bench harness,
+and the figure-generation scripts; the analysis drivers used for
+\S\ref{sec:eval-hitrate} and \S\ref{sec:eval-mode}
+(\texttt{scripts/dev/extract\_\allowbreak{}full\_\allowbreak{}corpus\_\allowbreak{}rescue.py},
+\texttt{scripts/dev/extract\_\allowbreak{}tool\_\allowbreak{}call\_\allowbreak{}rate.py})
+are part of this set. (iii)~The pod-orchestration driver
+(\texttt{scripts/dev/oneshot\_pod.\{sh,py\}}) and the recompute-ratio
+sweep driver (\texttt{scripts/dev/recompute\_probe.sh}). Items
+(ii)~and~(iii) are released under MIT on acceptance, with a frozen
+submission-time tag accessible to reviewers via a double-blind-
+compatible anonymous Zenodo archive linked from the submission.
+
+\section{Anchor Recognition Walkthrough}
+\label{app:anchors}
+
+To make \S\ref{sec:cc-segment}'s parser concrete, this appendix shows
+one real CC request body (lightly redacted) with the structural
+anchors color-highlighted and the cacheblend separator
+\texttt{\textquotedbl{}~\#~\#~\textquotedbl{}} marked at each
+injection site.
+
+\definecolor{anchorHeader}{HTML}{FFF3B0}   % header (normalized fields)
+\definecolor{anchorGit}{HTML}{B8E0F5}      % gitStatus
+\definecolor{anchorCommits}{HTML}{F8C8DC}  % recent commits
+\definecolor{anchorReminder}{HTML}{D4EFCE} % system-reminder
+
+\paragraph{Color key.}
+\colorbox{anchorHeader}{\strut\,header\,} (per-turn, normalized
+per \S\ref{sec:header-norm});
+\colorbox{anchorGit}{\strut\,gitStatus\,};
+\colorbox{anchorCommits}{\strut\,commits\,};
+\colorbox{anchorReminder}{\strut\,\texttt{<system-reminder>}\,}.
+The injected separator is shown as
+\fbox{\,\texttt{~\#~\#~}\,} between blocks; cacheblend treats
+each separated span as one chunk for STORE / LOOKUP / blend.
+
+\begin{figure}[h]
+\begin{flushleft}\small\ttfamily
+\fbox{\,\texttt{~\#~\#~}\,}\\[1pt]
+\colorbox{anchorHeader}{\strut\,x-anthropic-billing-header:
+cc\_version=NORM; cch=NORM;\,}\\
+\fbox{\,\texttt{~\#~\#~}\,}\\[1pt]
+CWD: /Users/$\langle$user$\rangle$/skillcacher\\
+Date: 2026-05-08\\[3pt]
+\colorbox{anchorGit}{\strut\,gitStatus: This is the git status\dots\,}\\
+\colorbox{anchorGit}{\strut\,Current branch: main\,}\\
+\colorbox{anchorGit}{\strut\,Status:\,}\\
+\colorbox{anchorGit}{\strut\,M~~benchmark/results/audit/$\dots$\,}\\
+\colorbox{anchorGit}{\strut\,??~scripts/dev/cacheblend\_quality.sh\,}\\
+\fbox{\,\texttt{~\#~\#~}\,}\\[1pt]
+\colorbox{anchorCommits}{\strut\,Recent commits:\,}\\
+\colorbox{anchorCommits}{\strut\,f8a0cfa fix(capture): plant\dots\,}\\
+\colorbox{anchorCommits}{\strut\,12778ec docs: Plan 3 resume\dots\,}\\
+\fbox{\,\texttt{~\#~\#~}\,}\\[1pt]
+\colorbox{anchorReminder}{\strut\,$\langle$system-reminder$\rangle$\,}\\
+\colorbox{anchorReminder}{\strut\,As you answer the user's
+questions\dots\,}\\
+\colorbox{anchorReminder}{\strut\,$\langle$/system-reminder$\rangle$\,}\\
+\fbox{\,\texttt{~\#~\#~}\,}\\[1pt]
+\end{flushleft}
+\caption{One real CC request, anchors highlighted. The parser
+identifies four blocks: the per-turn billing header (yellow), the
+gitStatus block (blue), the Recent-commits block (pink), and the
+\texttt{<system-reminder>} wrapper (green). Cacheblend separators
+are injected on each side of every recognized block. The yellow
+block's \texttt{cc\_version} and \texttt{cch} fields have already
+been rewritten to \texttt{NORM} by \S\ref{sec:header-norm}'s
+header normalizer, which is why the first KV chunk's hash is
+stable across multi-turn sessions.}
+\label{fig:anchor-walkthrough}
+\Description{Color-highlighted representation of a Claude Code
+request body. Four anchor classes are marked: yellow for the
+per-turn billing header, blue for the gitStatus block, pink for
+Recent commits, and green for the system-reminder wrapper.
+Cacheblend separator markers shown as boxed double-pound symbols
+between each anchor block.}
+\end{figure}
+
+\paragraph{What the parser does at each anchor.}
+\begin{enumerate}
+\item \textbf{Per-turn header (yellow):} detected by the
+  \texttt{x-anthropic-\allowbreak{}billing-\allowbreak{}header:}
+  prefix. The \texttt{cc\_version} and \texttt{cch} field values
+  are rewritten
+  in place to \texttt{NORM} placeholders before chunk hashing, so
+  the first KV chunk hash is identical across all turns of one CC
+  session (\S\ref{sec:header-norm}).
+\item \textbf{gitStatus (blue):} detected by the literal
+  \texttt{gitStatus:\textbackslash{}n} prefix. Typically 100--400
+  tokens long; spans the working-tree summary CC injects on session
+  start. Content is stable for the lifetime of a session.
+\item \textbf{Recent commits (pink):} detected by
+  \texttt{Recent commits:\textbackslash{}n}. Typically 50--200
+  tokens; the most recent commit hashes drift across sessions but
+  the structural anchor is stable.
+\item \textbf{\texttt{<system-reminder>} wrapper (green):} detected
+  by the literal tag pair. Variable-length (30--200 tokens
+  typically), often falls below
+  \texttt{blend\_min\_tokens}=256 in isolation and is rolled into
+  an adjacent block rather than getting its own separator pair ---
+  see \S\ref{sec:cc-segment}.
+\end{enumerate}
+
+\paragraph{Why this matters.} Without the parser, cacheblend's
+default \texttt{blend\_special\_str=\textquotedbl{}~\#~\#~\textquotedbl{}}
+never appears in CC outbound traffic --- CC's wire format uses
+\texttt{\textbackslash{}n\textbackslash{}n} as its block delimiter,
+and the resulting 25--180-token spans fall under the 256-token
+floor. The parser's job is to inject the configured separator at
+exactly the boundaries that produce content-stable, $\geq$256-token
+chunks. The four highlighted classes above are what enables
+cacheblend to engage at all on natural CC traffic.

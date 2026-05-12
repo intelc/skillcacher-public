@@ -1,0 +1,375 @@
+% =============================================================================
+% System
+% =============================================================================
+
+\section{System Design}
+\label{sec:system}
+
+\sys{} is a drop-in proxy that sits between Claude Code (CC) and a vLLM
+backend serving Llama-3.3-70B-Instruct fp8 with LMCache's
+\texttt{LMCacheConnectorV1} attached for cross-request KV reuse.
+Figure~\ref{fig:architecture} shows the data path. CC issues
+Anthropic-shaped requests against the proxy's \texttt{/v1/messages}
+endpoint; the proxy translates each request to vLLM's OpenAI-compatible
+\texttt{/v1/chat/completions} API, applies three outbound
+transformations, and forwards. The cacheblend integration we present
+in this section consists of those three transformations
+(\S\ref{sec:cc-segment}--\S\ref{sec:header-norm}); an offline
+statistical-span miner (\S\ref{sec:miner}) ships with the artifact
+but is not exercised in this paper's measurements.
+
+\begin{figure*}[t]
+  \centering
+  \begin{tikzpicture}[
+    every node/.style={font=\small},
+    component/.style={
+      draw, rectangle, rounded corners=2pt, minimum height=0.8cm,
+      align=center, font=\small\sffamily,
+    },
+    proxy/.style={component, fill=blue!8, draw=blue!50},
+    patch/.style={component, fill=orange!12, draw=orange!60, minimum width=2.3cm, minimum height=0.65cm, font=\footnotesize\sffamily},
+    backend/.style={component, fill=green!8, draw=green!55!black},
+    sink/.style={component, fill=gray!10, draw=gray!50, font=\footnotesize\sffamily},
+    miner/.style={component, fill=purple!8, draw=purple!50, font=\footnotesize\sffamily},
+    arrow/.style={-{Stealth[length=2mm]}, thick, draw=black!70},
+    offlinearrow/.style={-{Stealth[length=2mm]}, semithick, draw=purple!60, dashed},
+  ]
+
+  % CC client (left)
+  \node[component, fill=yellow!10, draw=yellow!50!brown, minimum width=2.2cm] (cc) at (0,0)
+    {Claude Code};
+
+  % Proxy box (container; title sits INSIDE the top)
+  \node[proxy, minimum width=5.4cm, minimum height=3.0cm, anchor=west] (proxybox)
+    at ($(cc.east) + (1.2,0)$) {};
+  \node[anchor=north, font=\small\sffamily\bfseries, yshift=-0.12cm]
+    at (proxybox.north) {\sys{} proxy};
+
+  % Three transforms inside the proxy, vertically stacked, below the title
+  \node[patch, anchor=north, yshift=-0.65cm] (p1) at (proxybox.north)
+    {(1) CC-segment parser};
+  \node[patch, below=0.10cm of p1] (p2) {(2) Header normalization};
+  \node[patch, below=0.10cm of p2] (p3) {(3) Pre-seed dispatcher};
+
+  % Backend (right of proxy)
+  \node[backend, minimum width=3.6cm, minimum height=3.0cm, anchor=west]
+    (backendbox) at ($(proxybox.east) + (1.4,0)$) {};
+  \node[anchor=north, font=\small\sffamily\bfseries, yshift=-0.12cm]
+    at (backendbox.north) {vLLM + LMCache};
+  \node[component, fill=green!15, draw=green!55!black, anchor=north,
+        yshift=-0.65cm, minimum width=3.0cm, font=\footnotesize\sffamily]
+    (vllm) at (backendbox.north) {vLLM v0.19};
+  \node[component, fill=green!20, draw=green!55!black,
+        below=0.18cm of vllm, minimum width=3.0cm, minimum height=0.8cm,
+        font=\footnotesize\sffamily]
+    (lmcache) {LMCache 0.4.2\\\textbf{+ Patch 6}};
+
+  % Offline miner row: placed below the proxy so its arrow
+  % into p3 enters the proxy from below, avoiding the title.
+  \node[miner, below=1.0cm of proxybox.south, anchor=north, minimum width=4.5cm]
+    (minernode) {Offline statistical span miner\\\footnotesize suffix array + Kasai LCP + MinHash @ $J{=}0.8$};
+  \node[sink, left=0.5cm of minernode, minimum width=2.0cm, font=\footnotesize\sffamily]
+    (corpus) {Training corpus};
+
+  % --- Arrows ---
+  % Forward: CC -> proxy -> backend
+  \draw[arrow] (cc.east) -- node[above, font=\footnotesize] {\texttt{/v1/messages}} (proxybox.west);
+  \draw[arrow] (proxybox.east) -- node[above, font=\footnotesize] {rewritten + chunked} (backendbox.west);
+
+  % Offline: corpus -> miner -> pre-seed dispatcher.
+  % Arrow enters proxy from BELOW, terminating at p3 (the pre-seed dispatcher),
+  % so it never crosses the proxy title or p1/p2.
+  \draw[arrow] (corpus.east) -- (minernode.west);
+  \draw[offlinearrow] (minernode.north) -- node[right, font=\footnotesize\itshape, xshift=2pt] {JSONL spans} (p3.south);
+
+  % Pre-seed warmup STOREs travel into lmcache via the normal proxy->backend
+  % data path at startup (no extra arrow needed; called out by the {(3)}
+  % dispatcher block).
+
+  \end{tikzpicture}
+  \caption{\sys{} architecture. The proxy applies three transformations
+  to every outbound request: a CC-segment parser (\S\ref{sec:cc-segment})
+  that injects cacheblend's separator around recognized structural
+  blocks; per-turn header normalization (\S\ref{sec:header-norm}) that
+  stabilizes the first KV chunk's hash across turns; and a pre-seed
+  dispatcher driven by an offline statistical span miner
+  (\S\ref{sec:miner}) that warms the lmcache store with mined repeated
+  sequences at startup. Patch~6 (\S\ref{sec:patch6}) is applied to
+  lmcache inside the backend container.}
+  \label{fig:architecture}
+  \Description{Horizontal flow diagram. A Claude Code client on the
+  left sends a /v1/messages request to a skillcacher proxy in the
+  middle. The proxy contains three stacked components: CC-segment
+  parser, header normalization, and pre-seed dispatcher. The proxy
+  forwards the rewritten and chunked request to a vLLM-plus-LMCache
+  backend on the right; LMCache has Patch 6 applied. Below the proxy,
+  an offline statistical span miner reads from a training corpus and
+  sends mined JSONL spans up into the pre-seed dispatcher.}
+\end{figure*}
+
+\subsection{CC-segment parser}
+\label{sec:cc-segment}
+
+\paragraph{The chunking problem.} Cacheblend's segment detector
+expects its configured \texttt{blend\_special\_str} (default
+\texttt{\#\,\#}) to appear at chunk boundaries in the prompt. Chunks
+between separators are hashed and stored individually; chunks below
+\texttt{blend\_min\_tokens} (default 256) are ignored. CC's outbound
+traffic uses \texttt{\textbackslash n\textbackslash n} as its
+predominant block delimiter, which produces 25--180-token segments on
+the Llama tokenizer --- below the 256-token floor. Against natural CC
+traffic with the published default, the segment detector found zero
+chunks and cacheblend's retrieval rate was 0\% regardless of the
+workload's textual repetition.
+
+\paragraph{Structural anchors.} The parser identifies semantically
+meaningful CC block boundaries by literal anchor matching, then
+injects the cacheblend separator on either side of each recognized
+block. Anchors are deliberately content-stable across CC versions ---
+they key on substrings like \texttt{Status:\textbackslash n} (gitStatus
+preamble), \texttt{Recent commits:\textbackslash n}, the
+\texttt{<system-reminder>}/\texttt{</system-reminder>} wrapper,
+\texttt{Summary:\textbackslash n1.\ } (the 9-section auto-compact
+summary), and tool-output markers --- rather than on version digits
+or content hashes that drift between releases.
+
+Table~\ref{tab:cc-anchors} lists the recognized block types, their
+anchors, and typical token lengths on Llama-3 tokenization. The parser
+walks each request's text payloads once, materializes the set of
+matched (start, end, kind) spans, deduplicates overlapping matches by
+precedence, and then re-emits the original text with separators
+inserted at every span boundary. Spans below \texttt{blend\_min\_tokens}
+are rolled into the adjacent larger span rather than getting a
+separator pair --- this preserves the 256-token floor without forcing
+cacheblend to consider tiny isolated blocks.
+
+\begin{table}[t]
+\centering\small
+\begin{tabular}{@{}llr@{}}
+\toprule
+\textbf{Block} & \textbf{Anchor (literal)} & \textbf{Tokens} \\
+\midrule
+CC system header   & \texttt{cc\_version=$\to$Status:}  & 80--120 \\
+gitStatus          & \texttt{Status:\textbackslash n}   & 100--400 \\
+Recent commits     & \texttt{Recent commits:\textbackslash n} & 50--200 \\
+\texttt{<system-reminder>} & wrapper pair                & 30--200 \\
+Compaction preamble & \texttt{This session is being$\ldots$} & $\sim$30 \\
+Summary 9-section  & \texttt{Summary:\textbackslash n1.\ }    & 400--800 \\
+JSONL backreference & \texttt{If you need specific details$\ldots$} & 30--50 \\
+\texttt{<command-name>} & wrapper pair                & 5--30 \\
+Tool definitions   & (matched by Plan-2 structural tagger) & 300--1500 \\
+\bottomrule
+\end{tabular}
+\caption{Structural anchors recognized by the CC-segment parser. Token
+lengths are on Llama-3 tokenizer.}
+\label{tab:cc-anchors}
+\end{table}
+
+\paragraph{Why proxy-side, not bench-side?}
+The parser is wired into the proxy's request-entry path
+(\texttt{proxy/server.py:messages}) so it fires on every outbound
+request, not only on the benchmark's replay path. Two reasons. First,
+CC rebuilds its request body on each turn from its own session state
+--- any pre-injection in the user prompt is silently dropped by the
+time the body reaches the proxy. Second, putting the parser at the
+proxy means the same code unifies live production use (CC pointed at
+the proxy) and bench replay (synthetic requests sent through the proxy
+under controlled conditions). The validation we report in
+\S\ref{sec:evaluation} runs against the proxy's actual rewrite path,
+not a parallel implementation.
+
+\subsection{Patches to LMCache 0.4.2}
+\label{sec:patches}
+
+The published lmcache + vllm combination (lmcache 0.4.2 against
+vllm 0.19.0 with the V1 connector) ships with two integration issues
+that surface only on multi-turn agent workloads. The patches that
+follow are surgical: Patch~6 (\S\ref{sec:patch6}) is a 4-line
+chunk-alignment adjustment inside lmcache's V1 adapter, and the
+header normalizer (\S\ref{sec:header-norm}) is a 3-line proxy hook
+that runs two regex substitutions per outbound request. The CC-segment
+parser (\S\ref{sec:cc-segment}) sits in the proxy and injects
+cacheblend's separator at recognized structural anchors.
+
+\begin{table}[h]
+\footnotesize
+\centering
+\begin{tabular}{lc}
+\toprule
+Stack configuration on natural CC traffic & Failure mode \\
+\midrule
+Vanilla lmcache 0.4.2 + vllm 0.19.0 (no patches/proxy) & 0\% by mechanism \\
++ Patch~6 only (chunk-aligned \texttt{LOOKUP})         & 0\% by mechanism \\
++ CC-segment parser only (\texttt{\#\,\#} injection)   & 0\% by mechanism \\
++ Patch~6 + parser (no header norm)                    & near 0\% by mechanism \\
+\textbf{Full stack} (patches + parser + header norm)   & measured (\S\ref{sec:evaluation}) \\
+\bottomrule
+\end{tabular}
+\caption{Failure-mode analysis of the three patches. The
+``0\% by mechanism'' rows are diagnosed analytically rather than
+measured end-to-end: without Patch~6, the STORE/LOOKUP chunk-hash
+mismatch makes retrieval rate zero by construction
+(\S\ref{sec:patch6}); without the parser, cacheblend's
+\texttt{blend\_special\_str} never appears in CC traffic and the
+segment detector finds zero chunks (\S\ref{sec:cc-segment});
+without header normalization, chunk 0's hash drifts every turn and
+the chunk-by-chunk LOOKUP short-circuits on the first miss
+(\S\ref{sec:header-norm}). Only the full-stack row is measured
+end-to-end. A quantitative ablation that runs each intermediate
+configuration as a pod replay is follow-up work.}
+\label{tab:patch-failure-modes}
+\end{table}
+
+\noindent We submit the two upstream-target changes as a candidate
+upstream PR~\cite{lmcache-pr-tbd} and apply them in the
+container's boot recipe inside
+\texttt{scripts/dev/oneshot\_pod.py}.
+
+\subsubsection{Patch 6: chunk-aligned \texttt{LOOKUP}}
+\label{sec:patch6}
+
+\paragraph{The bug.}
+LMCache's \texttt{LMCacheConnectorV1} computes chunk hashes for the
+STORE and LOOKUP paths from two different token-id sources. On the
+\textbf{STORE} side, the connector hashes
+\texttt{request.token\_ids}, which an upstream vLLM transform has
+already chunk-aligned to
+$\lfloor n/256 \rfloor \cdot 256$~tokens
+(where 256 is \texttt{chunk\_size}). On the \textbf{LOOKUP} side
+(\texttt{get\_num\_\allowbreak{}new\_\allowbreak{}matched\_\allowbreak{}tokens}
+inside \texttt{vllm\_v1\_\allowbreak{}adapter.py}), the connector
+hashes \texttt{request.\allowbreak{}all\_token\_ids}, the full
+$n$-token prompt.
+
+For any prompt not exactly a multiple of 256, STORE and LOOKUP hash
+different ranges. For example, on a 289-token prompt, STORE hashes
+\texttt{tokens[0:256]} but LOOKUP hashes \texttt{tokens[0:289]}; the
+hashes never match. Retrieval rate is 0\% regardless of how the
+workload is shaped --- this is not a content problem, it's a chunk
+boundary problem on the lookup side.
+
+\paragraph{The fix.}
+We truncate the LOOKUP path's token range to chunk-size alignment
+before hashing, matching the STORE path's range. The patch is a
+one-line range adjustment inside
+\texttt{lmcache.\allowbreak{}integration.\allowbreak{}vllm.\allowbreak{}vllm\_v1\_adapter}
+applied at boot:
+
+\begin{lstlisting}[basicstyle=\ttfamily\footnotesize, breaklines=true, frame=single, framesep=4pt, breakindent=0pt, language=Python]
+# patched lookup token computation
+chunk = self.cache_engine.chunk_size  # 256
+n = len(request.all_token_ids)
+aligned_n = (n // chunk) * chunk
+token_ids = list(request.all_token_ids[:aligned_n])
+\end{lstlisting}
+
+\paragraph{Empirical impact.}
+In single-pod commissioning runs (Llama-70B fp8, single H100), the
+patch lifted LMCache hit-token-count from 0 (across 40 consecutive
+requests with matching content) to non-zero immediately. With the
+full \sys{} stack online (patch + parser + normalization),
+\S\ref{sec:evaluation} reports rescue rates that reach 95--99\% at
+the steady-state peak of the per-turn distribution.
+
+\subsubsection{Per-turn header normalization}
+\label{sec:header-norm}
+
+\paragraph{The bug.} CC embeds an
+\texttt{x-anthropic-billing-header} field near the front of every
+prompt that carries two per-turn / per-build values:
+\texttt{cch=<hex>}, a 16-character per-request CC fingerprint, and
+\texttt{cc\_version=2.1.X.<suffix>}, where the \texttt{suffix} differs
+between regular turns and CC-internal turns (e.g., the
+\texttt{/compact} backend call uses a separate build identifier).
+Both fields fall within the first 256 tokens of every request. The
+first KV chunk's hash therefore differs on every turn of every
+session --- chunk 0 is never reused, and because cacheblend's
+chunk-by-chunk retrieval short-circuits on the first miss, no
+subsequent chunk gets a chance to hit either.
+
+This issue is invisible if you measure cacheblend on synthetic
+single-turn requests (the first turn is always a STORE pass), and
+invisible if you measure on permuted-RAG benchmarks (every chunk is
+re-positioned, so there is no expectation of chunk-0 stability). It
+specifically bites \emph{multi-turn agent traffic with a stable system
+prompt}, which is the setting cacheblend's compaction-cliff value
+proposition rests on.
+
+\paragraph{The fix.}
+Before separator injection, the parser rewrites both fields with
+stable \texttt{NORM} placeholders:
+
+\begin{lstlisting}[basicstyle=\ttfamily\footnotesize, breaklines=true, frame=single, framesep=4pt, language=Python]
+def _normalize_cc_header(text: str) -> str:
+    text = _CCH_VAR.sub("cch=NORM;", text)
+    text = _CC_VERSION_VAR.sub(
+        "cc_version=NORM;", text)
+    return text
+\end{lstlisting}
+
+The model treats this billing header as opaque text (the backend
+itself does not parse it; it is CC-side metadata stuffed into the
+prompt for downstream cost attribution), so normalizing its
+variable fields should not change downstream token output at $T{=}0$.
+We empirically verify this on our setup: on the no-cache condition,
+the model's output on normalized vs unnormalized headers is
+bit-identical at $T{=}0$ across all 54 (capture, turn) pairs of the
+SWE-V+\texttt{post\_compact} subset. We make no claim about
+$T{>}0$ sampling or other backends.
+
+After normalization, chunk 0 hashes identically across all turns of one
+session. With patch + parser + normalization combined, cacheblend's
+per-turn rescue rate on natural CC traffic lifted from a flat 0\% to
+the bimodal distribution characterized in \S\ref{sec:eval-hitrate}
+(median 87.5\%, with a 13\% mass of turns reaching 95--99\%
+steady-state).
+
+\subsection{Statistical span miner (artifact, unmeasured)}
+\label{sec:miner}
+
+The structural parser handles CC-specific anchors that are visible in
+the source. A complementary component runs offline against a training
+corpus of past traces and identifies long-form repeated token
+sequences that no source-level anchor exists for --- examples include
+fully-rendered tool definitions, repeated multi-line directives in
+prompts that the user has cut-and-pasted across sessions, and
+near-duplicate file headers in code blocks. \emph{The miner ships as
+part of the \sys{} artifact but is not isolated in this paper's
+evaluation: all reported numbers use the structural parser plus
+Patches 6 and the header normalizer, with statistical-span pre-seed
+disabled.} We describe the miner here for completeness; whether and
+how much it adds on top of the structural baseline is an open
+ablation we defer to follow-up work.
+
+\paragraph{Algorithm.} The miner builds a suffix array over the
+concatenated corpus token stream using prefix-doubling construction
+(an early implementation using \texttt{sorted(range(n), key=...)} hung
+on a 250\,K-token corpus; the prefix-doubling variant runs in
+$O(n \log^2 n)$ time and completes on the full \dataset{} corpus in
+tens of seconds of pure-Python compute --- see
+Appendix~\ref{app:miner} for the per-step breakdown). Kasai's LCP
+construction gives the longest-common-prefix array in linear time.
+A monotonic-stack walk over LCP emits all maximal-repeat substrings,
+including both outer blocks and nested plateaus --- an earlier
+single-pass walk missed the nested case and undercounted spans by
+30--40\%. The candidate spans are then deduplicated by MinHash at
+Jaccard threshold $0.8$ (64 permutations, shingle width 5,
+implemented via hand-rolled BLAKE-2b without external dependencies).
+
+\paragraph{Output.} The miner emits a JSONL of canonical spans with
+their occurrence counts, source request IDs, and token sequences. On
+the \dataset{} corpus (278\,K tokens, 170 streams), the miner
+produces 181 unique spans; the highest-frequency hit is a 1691-token
+CC system anchor seen in 26 of 170 requests.
+
+\paragraph{Pre-seed.} A proxy-startup hook
+(\texttt{pre\_seed\_statistical\_spans}) reads the JSONL and, for each
+span, dispatches a synthetic STORE request whose prompt contains the
+span; the response is discarded. After startup, every cached span is
+present in the lmcache store and is reachable on its first real
+production reference. Pre-seed is gated by the
+\texttt{SKILLCACHER\_STATISTICAL\_SPANS\_FILE} environment variable
+--- unset for the structural-only baseline, set to the JSONL path
+for the structural+statistical condition. The two configurations
+share all other code; the only difference is whether the pre-seed
+warmup fires.

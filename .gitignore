@@ -1,0 +1,52 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+.venv/
+venv/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Environment
+.env
+.env.local
+*.env
+
+# Benchmark outputs (regenerated per-run)
+benchmark/data/
+benchmark/results/
+benchmark/.tmp/
+
+# LaTeX intermediates
+paper/main.pdf
+paper/*.aux
+paper/*.bbl
+paper/*.bcf
+paper/*.blg
+paper/*.fdb_latexmk
+paper/*.fls
+paper/*.log
+paper/*.out
+paper/*.run.xml
+paper/*.toc
+paper/*.synctex.gz
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Captures / traces (large + may contain unredacted material)
+*.sqlite
+*.parquet
+tests/fixtures/**/captures/

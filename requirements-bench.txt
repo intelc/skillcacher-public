@@ -1,0 +1,16 @@
+# Pinned versions for reproducible benchmarks.
+# Synced 2026-05-05 to the local venv versions where 98 tests pass.
+# Update intentionally and re-run pytest + the LiteLLM smoke before adopting.
+#
+# vllm is supplied by the pod image (`vllm/vllm-openai:latest` preferred for
+# RunPod compatibility; `lmcache/vllm-openai:latest-nightly-cu13` is the
+# pre-baked fallback). Runtime vllm version is recorded in each bench JSON.
+#
+# lmcache is pinned here because `vllm/vllm-openai:latest` does not bake it
+# in — bootstrap.sh pip-installs from this pin. lmcache 0.4.x requires
+# transformers>=4.51.1, which 5.7.0 satisfies.
+fastapi==0.136.1
+litellm==1.83.14
+pyarrow==24.0.0
+transformers==5.7.0
+lmcache==0.4.4

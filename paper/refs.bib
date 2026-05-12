@@ -1,0 +1,136 @@
+@inproceedings{vllm-sosp,
+  title     = {Efficient Memory Management for Large Language Model Serving with {PagedAttention}},
+  author    = {Kwon, Woosuk and Li, Zhuohan and Zhuang, Siyuan and Sheng, Ying and Zheng, Lianmin and Yu, Cody Hao and Gonzalez, Joseph and Zhang, Hao and Stoica, Ion},
+  booktitle = {Proceedings of the 29th Symposium on Operating Systems Principles (SOSP)},
+  year      = {2023},
+  doi       = {10.1145/3600006.3613165}
+}
+
+@misc{lmcache-paper,
+  title        = {{LMCache}: Cross-Request {KV} Cache Reuse for Large Language Model Serving},
+  author       = {{LMCache Team}},
+  year         = {2024},
+  note         = {\url{https://github.com/LMCache/LMCache}},
+  howpublished = {GitHub repository and design notes}
+}
+
+@inproceedings{lmcache-cacheblend,
+  title     = {{CacheBlend}: Fast Large Language Model Serving with Cached Knowledge Fusion},
+  author    = {Yao, Jiayi and Li, Hanchen and Liu, Yuhan and Zhang, Siyuan and Du, Kuntai and Wang, Xiaozhe and Lu, Qizheng and Jiang, Junchen},
+  booktitle = {EuroSys 2025},
+  year      = {2025},
+  note      = {Also: arXiv:2405.16444}
+}
+
+@misc{claude-code,
+  title        = {Claude Code},
+  author       = {{Anthropic}},
+  year         = {2025},
+  note         = {\url{https://claude.com/code}}
+}
+
+@misc{claudecode-trace-hf,
+  title        = {{ClaudeCodeTrace}: A Public Benchmark of {Claude Code} Captures},
+  author       = {Chen, Yiheng},
+  year         = {2026},
+  note         = {\url{https://huggingface.co/datasets/intelchen/claudecode-trace}, CC-BY 4.0}
+}
+
+@misc{lmcache-pr-tbd,
+  title        = {Chunk-aligned {LOOKUP} fix for {LMCache} v0.4.2},
+  author       = {Chen, Yiheng},
+  year         = {2026},
+  note         = {PR pending upstream; see source at \url{https://github.com/intelchen/skillcacher}}
+}
+
+@inproceedings{sglang-paper,
+  title     = {{SGLang}: Efficient Execution of Structured Language Model Programs},
+  author    = {Zheng, Lianmin and Yin, Liangsheng and Xie, Zhiqiang and Sun, Chuyue and Huang, Jeff and Yu, Cody Hao and Cao, Shiyi and Kozyrakis, Christos and Stoica, Ion and Gonzalez, Joseph E. and Barrett, Clark and Sheng, Ying},
+  booktitle = {NeurIPS 2024},
+  year      = {2024}
+}
+
+@misc{tgi-repo,
+  title        = {Text Generation Inference ({TGI})},
+  author       = {{Hugging Face}},
+  year         = {2023},
+  note         = {\url{https://github.com/huggingface/text-generation-inference}}
+}
+
+@inproceedings{distserve-osdi,
+  title     = {{DistServe}: Disaggregating Prefill and Decoding for Goodput-optimized Large Language Model Serving},
+  author    = {Zhong, Yinmin and Liu, Shengyu and Chen, Junda and Hu, Jianbo and Zhu, Yibo and Liu, Xuanzhe and Jin, Xin and Zhang, Hao},
+  booktitle = {18th USENIX Symposium on Operating Systems Design and Implementation (OSDI)},
+  year      = {2024}
+}
+
+@inproceedings{promptcache-mlsys,
+  title     = {{Prompt Cache}: Modular Attention Reuse for Low-Latency Inference},
+  author    = {Gim, In and Chen, Guojun and Lee, Seung-seob and Sarda, Nikhil and Khandelwal, Anurag and Zhong, Lin},
+  booktitle = {MLSys 2024},
+  year      = {2024}
+}
+
+@misc{chunkattention,
+  title        = {{ChunkAttention}: Efficient Self-Attention with Prefix-Aware {KV} Cache and Two-Phase Partition},
+  author       = {Ye, Lu and Tao, Ze and Huang, Yong and Li, Yang},
+  year         = {2024},
+  note         = {arXiv:2402.15220}
+}
+
+@inproceedings{swe-bench-iclr,
+  title     = {{SWE-bench}: Can Language Models Resolve Real-World {GitHub} Issues?},
+  author    = {Jimenez, Carlos E. and Yang, John and Wettig, Alexander and Yao, Shunyu and Pei, Kexin and Press, Ofir and Narasimhan, Karthik},
+  booktitle = {ICLR 2024},
+  year      = {2024}
+}
+
+@misc{swe-bench-verified,
+  title        = {Introducing {SWE-bench Verified}},
+  author       = {{OpenAI}},
+  year         = {2024},
+  note         = {\url{https://openai.com/index/introducing-swe-bench-verified/}}
+}
+
+@misc{metagpt-paper,
+  title        = {{MetaGPT}: Meta Programming for a Multi-Agent Collaborative Framework},
+  author       = {Hong, Sirui and others},
+  year         = {2024},
+  note         = {arXiv:2308.00352}
+}
+
+@misc{agentbench,
+  title        = {{AgentBench}: Evaluating {LLMs} as Agents},
+  author       = {Liu, Xiao and others},
+  year         = {2023},
+  note         = {arXiv:2308.03688}
+}
+
+@inproceedings{mtbench,
+  title     = {Judging {LLM}-as-a-judge with {MT-Bench} and {Chatbot Arena}},
+  author    = {Zheng, Lianmin and Chiang, Wei-Lin and Sheng, Ying and Zhuang, Siyuan and Wu, Zhanghao and Zhuang, Yonghao and Lin, Zi and Li, Zhuohan and Li, Dacheng and Xing, Eric P. and Zhang, Hao and Gonzalez, Joseph E. and Stoica, Ion},
+  booktitle = {NeurIPS 2023 Track on Datasets and Benchmarks},
+  year      = {2023}
+}
+
+@misc{alpacaeval,
+  title        = {{AlpacaEval}: An Automatic Evaluator of Instruction-following Models},
+  author       = {Li, Xuechen and Zhang, Tianyi and Dubois, Yann and Taori, Rohan and Gulrajani, Ishaan and Guestrin, Carlos and Liang, Percy and Hashimoto, Tatsunori B.},
+  year         = {2023},
+  note         = {\url{https://github.com/tatsu-lab/alpaca_eval}}
+}
+
+@misc{chatbot-arena,
+  title        = {Chatbot {Arena}: An Open Platform for Evaluating {LLMs} by Human Preference},
+  author       = {Chiang, Wei-Lin and Zheng, Lianmin and Sheng, Ying and Angelopoulos, Anastasios Nikolas and Li, Tianle and Li, Dacheng and Zhang, Hao and Zhu, Banghua and Jordan, Michael and Gonzalez, Joseph E. and Stoica, Ion},
+  year         = {2024},
+  note         = {arXiv:2403.04132}
+}
+
+@inproceedings{kasai-lcp,
+  title        = {Linear-Time Longest-Common-Prefix Computation in Suffix Arrays and Its Applications},
+  author       = {Kasai, Toru and Lee, Gunho and Arimura, Hiroki and Arikawa, Setsuo and Park, Kunsoo},
+  booktitle    = {Combinatorial Pattern Matching ({CPM})},
+  year         = {2001},
+  pages        = {181--192}
+}

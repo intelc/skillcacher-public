@@ -1,0 +1,18 @@
+{
+  "model": "claude-sonnet-4-5-20250929",
+  "max_tokens": 1024,
+  "system": [
+    {"type": "text", "text": "You are Claude Code, a coding assistant.", "cache_control": {"type": "ephemeral"}}
+  ],
+  "messages": [
+    {"role": "user", "content": [{"type": "text", "text": "Hello, list files."}]}
+  ],
+  "tools": [
+    {
+      "name": "Read",
+      "description": "Read a file from disk",
+      "input_schema": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}
+    }
+  ],
+  "stream": false
+}

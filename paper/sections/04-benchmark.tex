@@ -1,0 +1,187 @@
+% =============================================================================
+% Benchmark — ClaudeCodeTrace dataset
+% =============================================================================
+
+\section{The \dataset{} Benchmark}
+\label{sec:benchmark}
+
+The evaluation in \S\ref{sec:evaluation} is only as credible as
+the traffic it replays. Existing LLM-serving benchmarks are not a good
+fit: ShareGPT-derived corpora capture single-shot conversations with no
+tool-use structure; SWE-bench-Verified~\cite{swe-bench-verified,
+swe-bench-iclr} provides tasks but not on-wire request bodies; and the
+preference-style benchmarks (MT-Bench~\cite{mtbench},
+Alpaca\-Eval~\cite{alpacaeval}, Chatbot
+Arena~\cite{chatbot-arena}) are about model output ranking, not cache
+behavior. None of them produce the long, system-prompt-heavy,
+tool-call-laced request bodies that a real agent harness emits, and
+none of them exercise the post-compaction prefix pattern that motivates
+\sys{} (\S\ref{sec:intro}).
+
+\dataset{} fills this gap. It is a corpus of \textbf{13 captures
+spanning 182 turns and 411k total tokens (389k prompt~+~22k
+completion)} of on-wire Claude Code request bodies, captured through
+the \sys{} proxy against a real Claude Code client running real
+workloads on a researcher's laptop. It is released CC-BY 4.0 on
+Hugging Face~\cite{claudecode-trace-hf} so that future work on agent
+serving --- whether on cacheblend, on subsequent KV-reuse mechanisms,
+or on entirely different infrastructure --- can use the same baseline.
+
+\subsection{Subset composition}
+\label{sec:dataset-subsets}
+
+The corpus is organized into three subsets, each targeting a different
+slice of agent traffic:
+
+\begin{table*}[t]
+\small
+\centering
+\begin{tabular}{lrrrrr}
+\toprule
+Subset & Captures & Turns & Substantive turns & Prompt tokens & Completion tokens \\
+\midrule
+\texttt{swebench\_verified/} & 5 & 24 & 19 & 121{,}741 & 555 \\
+\texttt{post\_compact/} & 7 & 105 & 98 & 186{,}464 & 16{,}803 \\
+\texttt{skill\_invocation/} & 1 & 53 & 52 & 80{,}660 & 4{,}334 \\
+\midrule
+\textbf{Total} & \textbf{13} & \textbf{182} & \textbf{169} & \textbf{388{,}865} & \textbf{21{,}692} \\
+\bottomrule
+\end{tabular}
+\caption{\dataset{} subset composition. ``Substantive turns'' counts turns with
+prompt token count $\geq$256 --- the threshold below which
+\texttt{lmcache}'s \texttt{blend\_min\_tokens} guard prevents cacheblend
+from engaging. The 5 captures' completion-token totals on
+\texttt{swebench\_verified} are small because most turns terminate in
+tool-call JSON of 30--100 tokens; the totals on \texttt{post\_compact}
+and \texttt{skill\_invocation} are larger because those captures include
+prose continuations.}
+\label{tab:dataset-summary}
+\end{table*}
+
+\paragraph{\texttt{swebench\_verified/}} Five Claude Code sessions, each
+working on one task from SWE-bench Verified~\cite{swe-bench-verified}:
+\texttt{astropy-13398}, \texttt{matplotlib-26113}, \texttt{pylint-7080},
+\texttt{pytest-7490}, \texttt{sphinx-11510}. Each session is captured
+through its first 5 turns: a planning turn, several file-exploration
+tool calls (\texttt{Read}, \texttt{Bash}, \texttt{Grep}), and an initial
+patch attempt. Prompts grow from $\approx$1k tokens on turn~1 to
+$\geq$6k tokens by turn~5 as tool outputs accumulate in the running
+conversation. This subset is the canonical baseline for agent
+prefix-cache work: small-but-realistic, faithful to a published task
+suite, and reproducible end-to-end (the original SWE-V task ID is
+preserved in each capture's metadata).
+
+\paragraph{\texttt{post\_compact/}} Seven captures (v1--v7) of CC's
+\texttt{/compact} boundary, each running a single agentic conversation
+through pre-compact buildup, an explicit \texttt{/compact}, and
+post-compact continuation. \textbf{v1--v5 are diagnostic traces only ---
+they were captured against mid-bug proxy states during development of
+Patch~6 and the per-turn header normalizer (\S\ref{sec:patches}) and
+are not part of this paper's benchmark claims.} v6 and v7 are the
+canonical post-fix captures used in the evaluation. We expose all
+seven in \dataset{} because the diagnostic ones are useful for
+anyone debugging cache-LOOKUP behavior on Llama-class backends, but
+the paper's headline numbers exclude v1--v5. Per-capture statistics are nearly uniform (each
+runs the same 15-turn agent script): $\approx$26k prompt tokens, 14
+substantive turns, max prompt $\approx$2.3k. The uniformity is
+deliberate --- the subset is a controlled set of seven runs of the same
+workload, varying only the proxy/cacheblend state, so any cross-capture
+delta isolates a code change rather than a workload change.
+
+\paragraph{\texttt{skill\_invocation/}} One capture (53 turns, 80k
+prompt tokens, 52 substantive) that exercises CC's skill-loading
+mechanism. We script CC to invoke five different skills (\texttt{bash-safety},
+\texttt{commit-msg-style}, \texttt{markdown-table},
+\texttt{python-import-order}, \texttt{weather-format}) across three
+prompts each, plus a few setup and verification turns. The shared
+agentic preamble across turns means cacheblend has substantial
+within-capture prefix overlap to mine; the skill-specific suffixes
+exercise the LOOKUP path with different selective-recompute patterns.
+This subset is the smallest by capture count but the densest by turn
+count, and it was the highest-value target for the statistical span
+miner (\S\ref{sec:miner}) --- 49 of the top 100 mined spans come from
+this single capture's prompt vocabulary.
+
+\subsection{On-wire schema}
+\label{sec:dataset-schema}
+
+Each capture is one directory on disk with the following files:
+
+\begin{itemize}
+\item \texttt{traces.sqlite} --- per-request metadata: \texttt{request\_id},
+  \texttt{session\_id}, \texttt{ts\_start}/\texttt{ts\_end},
+  \texttt{prompt\_token\_count}, \texttt{response\_token\_count}, the
+  full \texttt{request\_body\_json}, and instrumented cacheblend
+  counters (\texttt{cache\_read\_tokens},
+  \texttt{cache\_recompute\_tokens},
+  \texttt{chunk\_aligned\_hit\_tokens},
+  \texttt{tokens\_recomputed\_hkvd},
+  \texttt{invariant\_violations}). These last five are populated when
+  the capture ran against an instrumented lmcache build and surface the
+  internal accounting that the §1.6 patches rely on; for plain proxy
+  captures (e.g., \texttt{post\_compact/v1}) they are NULL.
+\item \texttt{tokens/<request\_id>.parquet} --- the tokenized prompt as
+  emitted to vLLM, one row per chunk (256 tokens by default), with the
+  chunk hash. This is what cacheblend's LOOKUP key is computed against
+  and what the statistical span miner walks.
+\item \texttt{lookups/<request\_id>.parquet} --- per-chunk LOOKUP
+  results when the capture's pod had cacheblend enabled (HIT / MISS /
+  partial), with the chunk hash, the lookup latency, and the rescue
+  contribution.
+\item \texttt{vllm.log}, \texttt{oneshot\_boot.log},
+  \texttt{proxy.log} --- per-pod logs, useful for cross-referencing
+  the per-request rescue numbers against engine-side counters.
+\end{itemize}
+
+The schema is designed for additive evolution. New cacheblend
+counters can be added as new \texttt{sqlite} columns without breaking
+existing reader code; new per-chunk fields can be added to the parquet
+schemas via schema-on-read. The \texttt{request\_body\_json} column is
+the authoritative source of truth --- everything else can be
+recomputed from it.
+
+\subsection{Redaction surface}
+\label{sec:dataset-redact}
+
+CC's on-wire request body and our proxy's logs both incidentally
+contain credentials and identifiers that must not leave the
+researcher's laptop. We treat redaction as a release blocker, not an
+afterthought.
+
+\sys{} ships a redaction utility (\texttt{scripts/redact.py}) with
+named patterns for five identifier classes:
+
+\begin{enumerate}
+\item \textbf{Tailscale} --- auth keys (\texttt{tskey-auth-*}) and host
+  identifiers in URLs.
+\item \textbf{Hugging Face} --- access tokens (\texttt{hf\_*}).
+\item \textbf{RunPod} --- API keys (\texttt{rpa\_*}) and per-pod ingress
+  URLs.
+\item \textbf{Filesystem} --- absolute paths under \texttt{/Users/<user>/}
+  rewritten to \texttt{/Users/<user>/}.
+\item \textbf{CC client identifiers} --- the long-lived CC version
+  hash and the user-account ID that appear in request headers.
+\end{enumerate}
+
+A second utility (\texttt{scripts/publish\_claudecode\_trace.py}) re-runs
+the same patterns over every released file (\texttt{.json},
+\texttt{.log}, \texttt{.txt}, \texttt{.md}, plus parquet/sqlite payloads
+walked separately) and fails the publish on any post-redaction match
+that is not itself a redaction marker. The audit reports
+\textbf{0 violations} on the final 6.6\,MB tarball that was uploaded to
+Hugging Face. The audit log itself is included in the dataset card as
+provenance.
+
+\subsection{License and access}
+\label{sec:dataset-license}
+
+\dataset{} is released as
+\texttt{intelchen/claudecode-trace}~\cite{claudecode-trace-hf} under
+CC-BY 4.0. The dataset card documents the schema, the redaction surface,
+the SWE-V task IDs covered, and the
+\texttt{LMCACHE\_BLEND\_RECOMPUTE\_RATIOS}=0.15 default that every
+substantive measurement in \S\ref{sec:evaluation} uses. A reader
+download script
+(\texttt{scripts/download\_claudecode\_trace.py}) wraps Hugging Face's
+\texttt{snapshot\_download} with subset filters so that downstream
+benchmarks can pull only the captures they need.

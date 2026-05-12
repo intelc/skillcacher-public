@@ -1,0 +1,77 @@
+\documentclass[sigconf,nonacm=true,balance=false]{acmart}
+
+% =============================================================================
+% Skillcacher paper — main document
+%
+% Build:
+%   cd paper && make pdf
+%
+% Figures:
+%   make figures       — regenerates from benchmark/ data into paper/figures/
+%
+% Author: Yiheng "Intel" Chen <intel@intelchen.com>
+% =============================================================================
+
+\settopmatter{printacmref=false,printccs=false,printfolios=true}
+\setcopyright{none}
+
+\usepackage{booktabs}
+\usepackage{microtype}
+\usepackage{xcolor}
+\usepackage{xspace}
+\usepackage{tikz}
+\usetikzlibrary{positioning,arrows.meta,shapes.geometric,fit,backgrounds,calc}
+\usepackage{listings}
+\usepackage{subcaption}
+\usepackage[normalem]{ulem}
+\usepackage{graphicx}
+\usepackage{algorithm}
+
+\newcommand{\sys}{skillcacher\xspace}
+\newcommand{\dataset}{ClaudeCodeTrace\xspace}
+
+% Allow TeX to relax inter-word spacing as a last resort to avoid overfull
+% hboxes from long monospace identifiers (e.g., long Python module paths).
+\setlength{\emergencystretch}{2em}
+% Long-tolerant TODO/note markers (paragraph-safe so multi-paragraph
+% draft content fits inside the braces without "Runaway argument?")
+\newcommand{\todo}[1]{{\color{red}\textbf{[TODO]:}\ #1}}
+\newcommand{\note}[1]{{\color{blue}\textbf{[note]:}\ #1}}
+
+\title{Hit Rate Is Not Output Quality: \\ Characterizing KV-Cache Reuse on Agent Traffic}
+\subtitle{A Replay Study of Approximate KV Reuse on Coding-Agent Traffic}
+
+\author{Yiheng ``Intel'' Chen}
+\affiliation{%
+  \institution{University of Pennsylvania}
+  \city{Philadelphia}
+  \state{PA}
+  \country{USA}
+}
+\email{intel@intelchen.com}
+
+\begin{abstract}
+\input{sections/00-abstract}
+\end{abstract}
+
+\keywords{LLM serving, KV cache, prefix caching, cacheblend, agent systems, Claude Code}
+
+\begin{document}
+
+\maketitle
+
+\input{sections/01-introduction}
+\input{sections/02-background}
+\input{sections/03-system}
+\input{sections/04-benchmark}
+\input{sections/05-evaluation}
+\input{sections/06-discussion}
+\input{sections/07-related}
+\input{sections/08-conclusion}
+
+\bibliographystyle{ACM-Reference-Format}
+\bibliography{refs}
+
+\input{sections/09-appendix}
+
+\end{document}

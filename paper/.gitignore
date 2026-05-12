@@ -1,0 +1,18 @@
+# LaTeX intermediates
+*.aux
+*.bbl
+*.bcf
+*.blg
+*.fdb_latexmk
+*.fls
+*.log
+*.out
+*.run.xml
+*.synctex.gz
+*.toc
+
+# Auxiliary files in subdirs
+sections/*.aux
+
+# Built PDF — gitignored to avoid noisy diffs on every rebuild
+main.pdf
