@@ -10,6 +10,7 @@ This is the artifact accompanying the paper:
 
 > **Hit Rate Is Not Output Quality: Characterizing KV-Cache Reuse on Agent Traffic.**
 > Yiheng "Intel" Chen, University of Pennsylvania.
+> [`skillcacher-paper.pdf`](skillcacher-paper.pdf) — 19 pages, ACM sigconf.
 
 ## What's in this repo
 

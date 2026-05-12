@@ -259,7 +259,7 @@ export $(grep -E "^ANTHROPIC_API_KEY=" .env | xargs)
 
 \paragraph{Artifact availability.} Three artifacts support
 end-to-end reproduction. (i)~\dataset{} on Hugging
-Face~\cite{claudecode-trace-hf}, available now under CC-BY 4.0; the
+Face~\cite{claudecode-trace-hf}, available under CC-BY 4.0; the
 \texttt{scripts/download\_claudecode\_trace.py} wrapper accepts
 \texttt{--subset} filters. (ii)~\sys{} source, including the
 patched lmcache wheel build script, the proxy, the bench harness,
@@ -270,9 +270,10 @@ and the figure-generation scripts; the analysis drivers used for
 are part of this set. (iii)~The pod-orchestration driver
 (\texttt{scripts/dev/oneshot\_pod.\{sh,py\}}) and the recompute-ratio
 sweep driver (\texttt{scripts/dev/recompute\_probe.sh}). Items
-(ii)~and~(iii) are released under MIT on acceptance, with a frozen
-submission-time tag accessible to reviewers via a double-blind-
-compatible anonymous Zenodo archive linked from the submission.
+(ii)~and~(iii) are released under MIT
+at~\cite{skillcacher-source}; the paper PDF, prebuilt figures, and
+this appendix's reproducibility scripts all live in the same
+repository at its root.
 
 \section{Anchor Recognition Walkthrough}
 \label{app:anchors}
