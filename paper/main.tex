@@ -58,6 +58,31 @@
 
 \begin{document}
 
+\begin{teaserfigure}
+  \centering
+  \includegraphics[width=0.72\textwidth]{figures/teaser.pdf}
+  \caption{\sys{}'s headline finding on Llama-3.3-70B-Instruct fp8.
+  Cacheblend rescues 95--99\% of post-compaction prompt tokens at the
+  prefill stage (top), reproducing the published rescue numbers on
+  natural Claude Code agent traffic (to our knowledge for the first
+  time on this workload class). But on the
+  divergent (capture, turn) pairs --- the 19 of 47 substantive pairs
+  in the deep-evaluation subset where cacheblend's blended-KV output
+  is not bit-identical to a no-cache baseline at $T{=}0$ --- a
+  Sonnet-4.6 LLM judge prefers cacheblend's
+  output on only 31.6\% of pairs and finds it non-inferior on 63.2\%
+  (bottom), well below the design specification's 85\% gate.
+  Hit rate is not output quality.}
+  \label{fig:teaser}
+  \Description{Two horizontal bars stacked vertically. Top bar shows a
+  green segment at 95 to 99 percent on a gray 0 to 100 percent axis,
+  labeled "Rescue: post-compaction prefill tokens served from cache".
+  Bottom bar shows a stacked horizontal bar with three segments:
+  prefer cacheblend at 32 percent in green, equivalent at 32 percent
+  in olive, and prefer no_cache at 37 percent in red, labeled
+  "Quality: LLM-judge A/B on n=19 divergent pairs".}
+\end{teaserfigure}
+
 \maketitle
 
 \input{sections/01-introduction}
