@@ -12,8 +12,8 @@ underlying cacheblend mechanism is claimed to (\S\ref{sec:eval-hitrate});
 bit-for-bit at temperature~0 (\S\ref{sec:eval-identity}); and (iii) when
 it does not, is the divergent output of equal quality to the baseline
 under a strong LLM judge (\S\ref{sec:eval-judge}). The first two
-questions admit numerical answers; the third is the question that
-matters for deployment.
+questions admit numerical answers; the third governs deployment
+viability.
 
 \paragraph{Methodology.} The backend is Llama-3.3-70B-Instruct fp8 on
 2$\times$ NVIDIA H100 80GB in tensor-parallel mode (TP=2), with
@@ -37,7 +37,7 @@ the proxy under three conditions:
   enabled, lmcache inactive. Should be mathematically equivalent to
   no\_cache when no prior cross-request state exists.
 \item[\textbf{cacheblend}] lmcache enabled with our patches, cacheblend
-  blending active. The interesting condition.
+  blending active. The condition under test.
 \end{description}
 
 We compute token-identity via longest common prefix over each output's
@@ -178,9 +178,9 @@ across the intermediate band.}
 \label{fig:rescue-distribution}
 \end{figure}
 
-\paragraph{Two regimes.} Reading Table~\ref{tab:hit-rate} alongside
-Figure~\ref{fig:rescue-distribution}, the rescue mechanism behaves
-sharply differently in two regimes. In the \emph{steady-state regime}
+\paragraph{Two regimes.} Table~\ref{tab:hit-rate} and
+Figure~\ref{fig:rescue-distribution} reveal two regimes with sharply
+different rescue behavior. In the \emph{steady-state regime}
 (post-cache-warmup turns of a session repeating a stable prompt
 pattern), cacheblend rescues 95--99\% of prefill tokens, matching
 the published cacheblend headline. In the \emph{cold/shift regime}
@@ -253,10 +253,9 @@ Hot ($\geq$80\%)             & 28 & 1157 ms & 1930 ms & 0.67$\times$ \\
 \end{tabular}
 \caption{TTFT speedup of \texttt{cacheblend} relative to
 \texttt{no\_cache}, bucketed by per-turn rescue rate.
-\textbf{The deployment-relevant story is the reverse of the published
-narrative}: the turns where cacheblend rescues the most prefill tokens
-(95--99\% hit rate) are also the turns where it pays the largest
-end-to-end latency cost. On the 6 turns reaching $\geq$99\% rescue,
+\textbf{Latency cost scales with rescue}: the turns where cacheblend
+rescues the most prefill tokens (95--99\% hit rate) are also the
+turns where it pays the largest end-to-end latency cost. On the 6 turns reaching $\geq$99\% rescue,
 \texttt{cacheblend}'s median TTFT is \emph{7$\times$ larger} than
 \texttt{no\_cache}'s.}
 \label{tab:ttft-by-rescue}
@@ -285,8 +284,8 @@ This finding is independent of the agent-protocol cost in
 \S\ref{sec:eval-judge}: even if cacheblend's blended output were
 \emph{bit-identical} to no\_cache (which we have established it is
 not on 30\% of substantive turns), it would still be 55\% slower at
-the median and 7$\times$ slower at the peak. Hit rate is not output
-quality, and on this setup it is also not latency.
+the median and 7$\times$ slower at the peak. On this setup,
+hit-token rescue does not translate into TTFT reduction.
 
 \subsection{Output identity: cacheblend's STORE path is bit-identical, LOOKUP path diverges}
 \label{sec:eval-identity}
@@ -317,11 +316,11 @@ Across all 47 substantive ($\geq$256-token prompt) turns at $T=0$:
 The distribution is sharply bimodal (Figure~\ref{fig:identity-distribution}):
 either the blended-KV state produces the exact same argmax token-by-token,
 or it diverges almost immediately. The middle ground is empirically rare.
-Read median + IQR together: \emph{median identity is 1.0000 because more
-than half of substantive turns are bit-identical, but the IQR's lower
-quartile sitting at 0.11 means a quarter of turns drop to roughly 10\%
-identity.} This is not a ``$\geq$99\% gate met'' finding; the divergence
-is real and concentrated.
+Median identity is 1.0000 because more than half of substantive turns
+are bit-identical, but the lower quartile at 0.11 places a quarter of
+turns near 10\% identity. The bimodality matters: a median-only
+reading would mistake this for a $\geq$99\%-identity result, when in
+fact the divergence is concentrated in the lower tail.
 
 \begin{figure}[t]
 \centering
@@ -385,19 +384,18 @@ different \texttt{description} string. Tool selection preserved;
 argument generation drifts. Less downstream-impactful than Mode~A but
 still a measurable behavior delta.
 
-The dual-mode picture rules out the simplest reading of cacheblend's own
-quality claim (``small but bounded drift''). On Llama-70B fp8 with the
-default \texttt{recompute\_ratios}=0.15, the drift is sharply bimodal:
-mostly zero, occasionally large.
+The bimodal distribution is inconsistent with the cacheblend paper's
+``small but bounded drift'' characterization on this workload: on
+Llama-70B fp8 at the default \texttt{recompute\_ratios}=0.15, drift is
+concentrated either at zero or in the severe-divergence tail.
 
 \subsection{Agent-protocol usefulness: cacheblend fails non-inferiority on divergent pairs}
 \label{sec:eval-judge}
 
 The 30\% severe-divergence tail in Figure~\ref{fig:identity-distribution}
-could in principle be ``noise that mostly washes out'' --- if cacheblend's
-divergent output were on average just as task-useful as no\_cache's, the
-identity-rate degradation would be a meaningless artefact. We test this
-directly with an LLM-judge preference rate.
+is only a usefulness concern if divergent outputs are also less
+task-useful than the no\_cache baseline. The LLM-judge preference
+test below isolates this question.
 
 \paragraph{Setup.} We run a blind A/B preference judgment with Sonnet-4.6
 on the $n_{\text{div}}{=}19$ substantive pairs whose outputs differed
@@ -423,8 +421,8 @@ evaluation. We use ``agent-protocol usefulness'' rather than
 ``output quality'' for the rest of this section to keep the framing
 honest.
 
-\paragraph{Result.} Cacheblend fails the spec's $\geq$85\% non-inferiority
-gate cleanly:
+\paragraph{Result.} Cacheblend's non-inferiority rate on the divergent
+slice falls 22 points below the 85\% gate:
 
 \begin{table}[h]
 \small
@@ -511,10 +509,9 @@ both because each captures a real deployment concern: the conditional
 rate is what determines how often a user perceives a degraded next-step
 \emph{on the turns where cacheblend's selective recompute engages
 non-trivially}, while the end-to-end rate is what determines the
-aggregate impression across an entire session. We argue the
-conditional rate is the more load-bearing measurement, since the
-bit-identical pairs do not exercise the cacheblend code path that
-matters; reviewers may reasonably prefer either framing.
+aggregate impression across an entire session. The conditional rate
+isolates the cacheblend code path that actually engages; the
+end-to-end rate captures aggregate user impression. Both are reported.
 
 \begin{figure}[t]
 \centering
@@ -529,9 +526,9 @@ equivalent (6, 31.6 percent, olive), and prefer no_cache (7, 36.8
 percent, red). No unparseable segment is shown.}
 \end{figure}
 
-\paragraph{The judge is doing substantive work, not pattern-matching.}
-The per-pair rationales show real evaluation, not a mechanical
-``prefer tool calls'' heuristic. On
+\paragraph{Per-pair rationales show case-by-case reasoning.}
+The per-pair rationales show case-by-case evaluation, not a
+mechanical ``prefer tool calls'' heuristic. On
 \texttt{swebench\_verified/pytest-7490} turn~3 (no\_cache: tool-call to
 a non-existent path; cacheblend: multi-step prose plan), the judge
 \emph{prefers cacheblend}: \emph{``Output A provides a more thoughtful,

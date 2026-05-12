@@ -78,10 +78,9 @@ post-compact continuation. \textbf{v1--v5 are diagnostic traces only ---
 they were captured against mid-bug proxy states during development of
 Patch~6 and the per-turn header normalizer (\S\ref{sec:patches}) and
 are not part of this paper's benchmark claims.} v6 and v7 are the
-canonical post-fix captures used in the evaluation. We expose all
-seven in \dataset{} because the diagnostic ones are useful for
-anyone debugging cache-LOOKUP behavior on Llama-class backends, but
-the paper's headline numbers exclude v1--v5. Per-capture statistics are nearly uniform (each
+canonical post-fix captures used in the evaluation. All seven are
+released so v1--v5 remain available for downstream cache-LOOKUP
+debugging on Llama-class backends; headline numbers exclude v1--v5. Per-capture statistics are nearly uniform (each
 runs the same 15-turn agent script): $\approx$26k prompt tokens, 14
 substantive turns, max prompt $\approx$2.3k. The uniformity is
 deliberate --- the subset is a controlled set of seven runs of the same
@@ -137,8 +136,7 @@ The schema is designed for additive evolution. New cacheblend
 counters can be added as new \texttt{sqlite} columns without breaking
 existing reader code; new per-chunk fields can be added to the parquet
 schemas via schema-on-read. The \texttt{request\_body\_json} column is
-the authoritative source of truth --- everything else can be
-recomputed from it.
+the authoritative record; all other artifacts are derivable from it.
 
 \subsection{Redaction surface}
 \label{sec:dataset-redact}

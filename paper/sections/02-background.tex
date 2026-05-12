@@ -8,10 +8,9 @@
 This section establishes the four pieces of vocabulary that
 \S\ref{sec:system}--\S\ref{sec:evaluation} assume: vLLM's paged-attention
 prefix cache, LMCache's cross-request KV store, cacheblend's selective
-recompute, and Claude Code's \texttt{/compact} boundary. Readers
-familiar with the first three may skim to \S\ref{sec:bg-claudecode};
-the \texttt{/compact} pattern is what makes the rest of the paper a
-non-trivial integration problem.
+recompute, and Claude Code's \texttt{/compact} boundary. The
+\texttt{/compact} boundary (\S\ref{sec:bg-claudecode}) is the
+integration target.
 
 \subsection{vLLM and prefix caching}
 \label{sec:bg-vllm}
@@ -82,10 +81,9 @@ attention layers in the rotated positional context (the
 The published cacheblend evaluation~\cite{lmcache-cacheblend} reports
 70--90\% rescue on permuted-RAG workloads and notes ``small but
 bounded'' quality drift, citing accuracy preservation on TruthfulQA at
-a single recompute ratio. \emph{We pick up the methodological thread
-here}: agent traffic is not RAG, $T=0$ greedy decoding makes
-single-token differences load-bearing, and hit rate is not output
-quality. \S\ref{sec:evaluation} measures all three.
+a single recompute ratio. Agent traffic is not RAG; at $T=0$ greedy
+decoding single-token differences are load-bearing; hit rate is not
+output quality. \S\ref{sec:evaluation} measures all three.
 
 \subsection{Claude Code and the \texttt{/compact} cliff}
 \label{sec:bg-claudecode}

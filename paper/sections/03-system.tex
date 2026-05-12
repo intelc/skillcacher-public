@@ -165,11 +165,11 @@ lengths are on Llama-3 tokenizer.}
 \label{tab:cc-anchors}
 \end{table}
 
-\paragraph{Why proxy-side, not bench-side?}
+\paragraph{Proxy-side placement.}
 The parser is wired into the proxy's request-entry path
 (\texttt{proxy/server.py:messages}) so it fires on every outbound
-request, not only on the benchmark's replay path. Two reasons. First,
-CC rebuilds its request body on each turn from its own session state
+request, not only on the benchmark's replay path. Two factors motivate
+this placement. First, CC rebuilds its request body on each turn from its own session state
 --- any pre-injection in the user prompt is silently dropped by the
 time the body reaches the proxy. Second, putting the parser at the
 proxy means the same code unifies live production use (CC pointed at
@@ -228,7 +228,7 @@ container's boot recipe inside
 \subsubsection{Patch 6: chunk-aligned \texttt{LOOKUP}}
 \label{sec:patch6}
 
-\paragraph{The bug.}
+\paragraph{Hash-range mismatch.}
 LMCache's \texttt{LMCacheConnectorV1} computes chunk hashes for the
 STORE and LOOKUP paths from two different token-id sources. On the
 \textbf{STORE} side, the connector hashes
@@ -244,11 +244,10 @@ $n$-token prompt.
 For any prompt not exactly a multiple of 256, STORE and LOOKUP hash
 different ranges. For example, on a 289-token prompt, STORE hashes
 \texttt{tokens[0:256]} but LOOKUP hashes \texttt{tokens[0:289]}; the
-hashes never match. Retrieval rate is 0\% regardless of how the
-workload is shaped --- this is not a content problem, it's a chunk
-boundary problem on the lookup side.
+hashes never match. Retrieval rate is 0\% by construction: the failure
+is on the LOOKUP-side chunk-boundary computation, not in content.
 
-\paragraph{The fix.}
+\paragraph{Chunk-aligned truncation.}
 We truncate the LOOKUP path's token range to chunk-size alignment
 before hashing, matching the STORE path's range. The patch is a
 one-line range adjustment inside
@@ -274,7 +273,7 @@ the steady-state peak of the per-turn distribution.
 \subsubsection{Per-turn header normalization}
 \label{sec:header-norm}
 
-\paragraph{The bug.} CC embeds an
+\paragraph{Per-turn header drift.} CC embeds an
 \texttt{x-anthropic-billing-header} field near the front of every
 prompt that carries two per-turn / per-build values:
 \texttt{cch=<hex>}, a 16-character per-request CC fingerprint, and
@@ -290,12 +289,12 @@ subsequent chunk gets a chance to hit either.
 This issue is invisible if you measure cacheblend on synthetic
 single-turn requests (the first turn is always a STORE pass), and
 invisible if you measure on permuted-RAG benchmarks (every chunk is
-re-positioned, so there is no expectation of chunk-0 stability). It
-specifically bites \emph{multi-turn agent traffic with a stable system
-prompt}, which is the setting cacheblend's compaction-cliff value
-proposition rests on.
+re-positioned, so there is no expectation of chunk-0 stability). The
+failure mode is specific to \emph{multi-turn agent traffic with a
+stable system prompt}, which is the setting cacheblend's
+compaction-cliff value proposition rests on.
 
-\paragraph{The fix.}
+\paragraph{Stable-placeholder rewrite.}
 Before separator injection, the parser rewrites both fields with
 stable \texttt{NORM} placeholders:
 
@@ -308,7 +307,7 @@ def _normalize_cc_header(text: str) -> str:
 \end{lstlisting}
 
 The model treats this billing header as opaque text (the backend
-itself does not parse it; it is CC-side metadata stuffed into the
+itself does not parse it; it is CC-side metadata carried in the
 prompt for downstream cost attribution), so normalizing its
 variable fields should not change downstream token output at $T{=}0$.
 We empirically verify this on our setup: on the no-cache condition,

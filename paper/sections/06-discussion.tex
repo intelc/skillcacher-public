@@ -23,10 +23,10 @@ three deployment-relevant implications.
 \paragraph{For hit-rate-only workloads, the quality cost is irrelevant
 --- but the latency cost still applies.} Any deployment that uses
 prefix caching for throughput accounting without surfacing model
-outputs directly to end users --- bulk embedding pipelines,
-throughput-benchmarking harnesses, KV-cache research itself --- need
-not worry about the 30\% divergence: those outputs aren't read. But
-the TTFT result of \S\ref{sec:eval-latency} (cacheblend 55\% slower at
+outputs to end users --- bulk embedding pipelines,
+throughput-benchmarking harnesses, KV-cache research itself --- is
+unaffected by the 30\% divergence rate: those outputs are not
+consumed. The TTFT result of \S\ref{sec:eval-latency} (cacheblend 55\% slower at
 median, 7$\times$ slower at peak rescue) still applies: cache hits
 are not free latency on a 70B fp8 + H100 backend because LOAD
 bandwidth approximately cancels prefill savings. Whether cacheblend
@@ -36,14 +36,14 @@ slower compute, or throughput-vs-latency optimization all shift the
 answer).
 
 \paragraph{For interactive coding agents like Claude Code, the
-divergence is load-bearing.} The 37\% no-cache-preferred rate is not a
-rounding error: an agent that picks a measurably worse next step on
-roughly one in three post-cache turns will surface to end users as
-``the cached path is dumber.'' Worse, the failure mode is sometimes a
-\emph{decode-mode flip} (tool call$\to$prose, 11\% of substantive
+divergence is load-bearing.} The 37\% no\_cache-preferred rate is
+material at deployment scale: a system that selects a measurably
+worse next step on roughly one in three post-cache turns produces a
+perceptible quality regression. Worse, the failure mode is sometimes
+a \emph{decode-mode flip} (tool call$\to$prose, 11\% of substantive
 turns); a CC harness that expects a tool-call JSON and receives prose
 must either retry, surface a degraded user experience, or silently
-fall through. None of these are good outcomes.
+fall through.
 
 \paragraph{For batch RAG-style workloads, the published cacheblend
 evaluation remains valid.} Our finding is specific to agent traffic
@@ -181,15 +181,14 @@ useful Pareto-improvement remains an open question.
 The combination of \S\ref{sec:eval-latency}'s TTFT measurement
 (cacheblend already slower than \texttt{no\_cache} at the default
 0.15 ratio on our backend) and this sweep's discrete-jump pattern
-suggests cacheblend's default ratio is not clearly a good operating
-point in our measurements, and that ratio=1.0 may not be the
-practical fix (it recomputes every layer, eliminating the rescue
-benefit). A genuine graded tradeoff curve --- one that gives
-proportional identity recovery against linear cost --- may require
-mechanism changes beyond the existing recompute-ratio knob
-(smaller cacheable blocks, layer-importance-aware recompute
-selection, or model-architecture co-design are candidates worth
-exploring).
+suggests the default 0.15 ratio is not a Pareto-optimal operating
+point on our backend, and ratio=1.0 eliminates the rescue benefit
+by recomputing every layer. A genuine graded tradeoff curve --- one
+that gives proportional identity recovery against linear cost ---
+likely requires mechanism changes beyond the recompute-ratio knob:
+candidate directions include smaller cacheable blocks,
+layer-importance-aware recompute selection, and model-architecture
+co-design.
 
 \paragraph{Sample size caveat.} Three substantive turns per ratio is
 a small sample; the 0.847~$\to$~0.831 dip at 0.5 is plausibly noise.
@@ -293,5 +292,6 @@ that the field has converged on is sufficient for the RAG-style
 workloads the early prefix-caching literature targeted, but it
 silently elides exactly the failure mode we surface here: a mechanism
 can hit at the published rate and still produce systematically worse
-output on the same input. We provide \dataset{} and the \sys{} harness
-as the reproducible substrate for this kind of evaluation.
+output on the same input. \dataset{} and the \sys{} harness provide
+the reproducible substrate for quality-aware KV-reuse evaluation on
+agent traffic.
